@@ -1,0 +1,85 @@
+name: Auto Release Anti-Mager Coach
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Debug APK & Auto Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+
+      - name: Decode debug keystore
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 --decode debug.keystore.base64 > debug.keystore
+          fi
+
+      - name: Build Debug APK
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug
+          else
+            gradle assembleDebug
+          fi
+
+      - name: Read versionName from app/build.gradle.kts
+        id: version
+        run: |
+          VERSION_NAME=$(grep -E '^\s*versionName\s*=' app/build.gradle.kts | head -n 1 | sed -E 's/.*versionName\s*=\s*"([^"]+)".*/\1/')
+          if [ -z "$VERSION_NAME" ]; then
+            echo "Gagal membaca versionName dari app/build.gradle.kts"
+            exit 1
+          fi
+          TAG_NAME="v${VERSION_NAME}"
+          echo "Detected versionName: ${VERSION_NAME} (tag: ${TAG_NAME})"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if GitHub Release already exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} sudah ada. Melewati pembuatan release baru."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release ${TAG_NAME} belum ada. Siap membuat release baru."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release & Upload APK
+        if: steps.check_release.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: Anti-Mager Coach ${{ steps.version.outputs.tag_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

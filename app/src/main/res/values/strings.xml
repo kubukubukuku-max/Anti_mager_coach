@@ -1,0 +1,180 @@
+<resources>
+    <string name="app_name">Anti-Mager Coach</string>
+    <string name="app_subtitle">Gerak pelan tetap berarti. Tanpa tekanan target.</string>
+
+    <!-- Greetings -->
+    <string name="greeting_morning">Selamat Pagi</string>
+    <string name="greeting_afternoon">Selamat Siang</string>
+    <string name="greeting_evening">Selamat Sore</string>
+    <string name="greeting_night">Selamat Malam</string>
+
+    <!-- Content Descriptions -->
+    <string name="cd_settings_sync">Pengaturan dan sinkronisasi data</string>
+    <string name="cd_delete_session">Hapus catatan sesi</string>
+    <string name="cd_edit_session">Edit catatan sesi</string>
+    <string name="cd_empty_illustration">Ilustrasi jalur pagi yang tenang</string>
+    <string name="cd_add_manual">Catat latihan manual</string>
+    <string name="cd_close">Tutup</string>
+    <string name="cd_add_exercise">Tambah gerakan</string>
+    <string name="cd_remove_exercise">Hapus gerakan</string>
+
+    <!-- Today Status -->
+    <string name="section_today_status">Kondisi Badan Hari Ini</string>
+    <string name="status_fresh">Senggang &amp; Fit</string>
+    <string name="status_tired">Agak Capek</string>
+    <string name="status_busy">Waktu Mepet</string>
+
+    <!-- Weekly Rhythm -->
+    <string name="weekly_rhythm_title">Ritme 7 Hari Terakhir</string>
+    <string name="weekly_active_days_label">Hari Aktif</string>
+    <string name="weekly_total_minutes_label">Total Menit</string>
+    <string name="weekly_strength_label">Beban</string>
+    <string name="weekly_cardio_label">Kardio</string>
+    <string name="weekly_chart_title">Grafik Konsistensi 7 Hari</string>
+    <string name="weekly_chart_empty_hint">Grafik durasi akan tumbuh perlahan setelah sesi pertamamu tersimpan di cloud.</string>
+    <string name="consistency_range_rolling_7d">7 Hari</string>
+    <string name="consistency_range_this_week">Sen–Min</string>
+    <string name="consistency_mode_bar">Batang</string>
+    <string name="consistency_mode_trend">Tren</string>
+    <string name="consistency_avg_label">Rata-rata</string>
+
+    <!-- Manual Log Entry Card -->
+    <string name="manual_log_button_title">Catat Latihan Manual</string>
+    <string name="manual_log_button_subtitle">Sudah gerak sendiri? Catat lari, badminton, beban, atau jalan santai</string>
+
+    <!-- Daily Suggestions -->
+    <string name="section_daily_suggestions">Saran Gerak Hari Ini</string>
+    <string name="badge_ideal">Ritme Utama</string>
+    <string name="badge_light">Anti-Mager</string>
+    <string name="label_relaxed_guide">Panduan Santai</string>
+    <string name="action_complete_session">Catat Selesai Sesi Ini</string>
+
+    <!-- History -->
+    <string name="section_recent_history">Riwayat Terakhir</string>
+    <string name="empty_history_message">Belum ada catatan latihan. Langkah pertama hari ini bebas mulai dari yang paling ringan!</string>
+    <string name="delete_dialog_title">Hapus catatan latihan?</string>
+    <string name="delete_dialog_body">Sesi ini akan dihapus dari riwayat akun dan sinkronisasi cloud-mu. Ritme 7 hari akan otomatis menyesuaikan.</string>
+    <string name="action_cancel">Batal</string>
+    <string name="action_delete">Hapus</string>
+    <string name="action_save_workout">Simpan Latihan</string>
+    <string name="edit_workout_title">Edit Catatan Latihan</string>
+    <string name="action_update_workout">Simpan Perubahan</string>
+
+    <!-- Settings / Sync -->
+    <string name="settings_title">Pengaturan &amp; Sync Data</string>
+    <string name="settings_storage_info">Data tersinkronisasi aman ke Firebase Cloud Firestore dan tetap bisa diakses di perangkat lain saat masuk dengan akun Google yang sama.</string>
+    <string name="settings_export_title">Ekspor Cadangan JSON</string>
+    <string name="settings_export_subtitle">Salin atau bagikan daftar sesi dalam format JSON</string>
+    <string name="settings_import_title">Impor Data JSON (Strava / Health / Cadangan)</string>
+    <string name="settings_import_subtitle">Tempel array JSON sesi latihan untuk digabungkan ke cloud tanpa duplikat</string>
+    <string name="settings_clear_title">Bersihkan Semua Riwayat</string>
+    <string name="settings_clear_confirm_title">Hapus semua catatan?</string>
+    <string name="settings_clear_confirm_body">Semua sesi latihan di akun cloud-mu akan dihapus permanen dan riwayat kembali kosong.</string>
+
+    <!-- Exercise Guide Dialog -->
+    <string name="guide_dialog_kicker">Panduan Gerakan Ramah Pemula</string>
+    <string name="guide_target_muscle_prefix">Target Otot:</string>
+    <string name="guide_steps_title">Langkah-Langkah Singkat</string>
+    <string name="guide_safety_tip_title">Tips Aman</string>
+    <string name="action_watch_youtube">Tonton Contoh di YouTube</string>
+    <string name="action_watch_youtube_short">Tonton di YouTube</string>
+
+    <!-- Theme Switcher -->
+    <string name="settings_theme_title">Tampilan &amp; Tema</string>
+    <string name="settings_theme_subtitle">Pilih tema lembut sesuai kenyamanan mata saat sesi pagi atau malam</string>
+    <string name="theme_warm_cream_label">Warm Cream</string>
+    <string name="theme_warm_cream_desc">Tenang &amp; cerah</string>
+    <string name="theme_deep_night_label">Deep Night</string>
+    <string name="theme_deep_night_desc">Ramah mata malam</string>
+
+    <!-- Health Connect -->
+    <string name="settings_hc_title">Health Connect &amp; Smartwatch</string>
+    <string name="settings_hc_subtitle">Tarik otomatis sesi olahraga, jarak, dan rata-rata detak jantung selama 14 hari terakhir.</string>
+    <string name="action_sync_health_connect">Sync dari Health Connect</string>
+    <string name="action_install_health_connect">Instal / Perbarui Health Connect</string>
+    <string name="hc_rationale_title">Izin Data Health Connect</string>
+    <string name="hc_rationale_body">Anti-Mager Coach membaca data sesi olahraga, jarak, dan rata-rata detak jantung (14 hari terakhir) dari Health Connect untuk menyusun ritme mingguan dan rekomendasi harian yang ramah di tubuhmu, lalu menyimpannya secara pribadi di akun cloud milikmu.</string>
+
+    <!-- Cloud Sync & Auth -->
+    <string name="auth_kicker">Sinkronisasi Cloud Pribadi</string>
+    <string name="auth_headline">Jaga ritme gerakmu tetap aman di semua perangkat</string>
+    <string name="auth_body">Masuk dengan akun Google agar seluruh catatan latihan, ritme mingguan, dan preferensi temamu tersimpan otomatis di cloud dan siap dilanjutkan kapan saja.</string>
+    <string name="auth_bullet_sync">Sinkronisasi otomatis lintas perangkat via Firebase Firestore</string>
+    <string name="auth_bullet_calm">Riwayat pribadi milikmu sendiri, tetap nyaman tanpa tekanan</string>
+    <string name="auth_sign_in_google">Masuk dengan Google</string>
+    <string name="auth_signing_in">Menghubungkan akun Google...</string>
+    <string name="settings_cloud_title">Akun &amp; Cloud Sync</string>
+    <string name="settings_cloud_status_synced">Tersinkron Cloud</string>
+    <string name="settings_cloud_status_syncing">Menyinkronkan...</string>
+    <string name="settings_cloud_status_error">Perlu Cek Koneksi</string>
+    <string name="action_sync_cloud_now">Sinkronkan Sekarang</string>
+    <string name="action_sign_out">Keluar Akun</string>
+    <string name="sign_out_confirm_title">Keluar dari akun?</string>
+    <string name="sign_out_confirm_body">Datamu tetap tersimpan aman di cloud. Kamu bisa masuk kembali kapan saja dengan akun Google ini.</string>
+
+    <!-- Daily Reminder Notifications -->
+    <string name="settings_reminder_title">Pengingat Harian</string>
+    <string name="settings_reminder_subtitle">Banner &amp; suara lembut setiap hari untuk cek energi dan saran gerak</string>
+    <string name="action_change_reminder_time">Ubah Jam</string>
+    <string name="action_test_notification_5s">Tes Notifikasi (5 Detik)</string>
+    <string name="reminder_time_picker_title">Pilih Jam Pengingat</string>
+    <string name="action_save_time">Simpan Jam</string>
+
+    <!-- Live Workout Timer -->
+    <string name="action_start_workout">Mulai Latihan</string>
+    <string name="action_already_done_log">Sudah selesai? Catat langsung</string>
+    <string name="action_save_direct">Simpan Langsung</string>
+    <string name="active_workout_kicker">Mode Latihan Aktif</string>
+    <string name="active_workout_status_running">Sedang Berjalan</string>
+    <string name="active_workout_status_paused">Dijeda Sementara</string>
+    <string name="active_workout_target_prefix">Target:</string>
+    <string name="active_workout_pause">Jeda</string>
+    <string name="active_workout_resume">Lanjut</string>
+    <string name="active_workout_finish">Selesai Latihan</string>
+    <string name="active_workout_checklist_title">Daftar Gerakan</string>
+    <string name="active_workout_checklist_hint">Centang saat selesai • tap ? untuk panduan</string>
+    <string name="active_workout_cancel_title">Batalkan sesi latihan?</string>
+    <string name="active_workout_cancel_body">Waktu latihan yang sedang berjalan tidak akan disimpan ke riwayatmu.</string>
+    <string name="active_workout_cancel_confirm">Ya, Batalkan</string>
+    <string name="active_workout_cancel_keep">Lanjut Latihan</string>
+    <string name="active_workout_calm_hint">Timer tetap akurat walau layar HP dimatikan. Ambil napas santai sesuai ritmemu.</string>
+    <string name="finish_workout_title">Keren! Latihan Selesai</string>
+    <string name="finish_workout_subtitle">Durasi real-time otomatis tercatat. Lengkapi detail ringan sebelum disimpan.</string>
+    <string name="finish_workout_realtime_label">Durasi Real-Time</string>
+    <string name="finish_workout_recorded_label">Tercatat</string>
+    <string name="finish_workout_save_session">Simpan Sesi</string>
+    <string name="finish_workout_back_to_timer">Kembali ke Timer</string>
+
+    <!-- App Version & GitHub Releases Update Checker -->
+    <string name="settings_update_title">Versi Aplikasi &amp; Pembaruan</string>
+    <string name="settings_update_current_version">Versi %1$s</string>
+    <string name="action_check_update">Cek Update</string>
+    <string name="update_checking_label">Memeriksa pembaruan...</string>
+    <string name="update_status_up_to_date">Aplikasi sudah versi terbaru!</string>
+    <string name="update_dialog_title">Pembaruan v%1$s Tersedia</string>
+    <string name="update_dialog_notes_header">Catatan Pembaruan</string>
+    <string name="action_download_update">Download &amp; Update</string>
+    <string name="action_later">Nanti</string>
+
+    <!-- Multi-Provider AI Coach (Groq & Gemini) -->
+    <string name="settings_gemini_title">AI Coach (Groq / Gemini)</string>
+    <string name="settings_gemini_subtitle">Personalisasi saran harian &amp; evaluasi mingguan dengan API Key pribadimu</string>
+    <string name="settings_ai_provider_label">Penyedia AI</string>
+    <string name="settings_gemini_status_active">AI Aktif ✨</string>
+    <string name="settings_gemini_status_offline">Mode Offline (Aturan Lokal)</string>
+    <string name="settings_groq_key_label">Groq API Key</string>
+    <string name="settings_groq_key_placeholder">Tempel API Key dari console.groq.com (gsk_...)</string>
+    <string name="settings_gemini_key_label">Gemini API Key</string>
+    <string name="settings_gemini_key_placeholder">Tempel API Key dari Google AI Studio</string>
+    <string name="action_save_api_key">Simpan Key</string>
+    <string name="cd_toggle_api_key_visibility">Tampilkan atau sembunyikan API Key</string>
+    <string name="ai_suggestion_badge">✨ Saran AI</string>
+    <string name="action_refresh_ai">✨ Refresh AI</string>
+    <string name="ai_loading_suggestions">Meminta saran AI Coach...</string>
+    <string name="action_weekly_ai_review">✨ Evaluasi Mingguan AI</string>
+    <string name="weekly_ai_review_title">Evaluasi Mingguan AI ✨</string>
+    <string name="weekly_ai_review_loading">AI Coach sedang meninjau ritme 7 hari terakhirmu...</string>
+    <string name="weekly_ai_review_missing_key">Masukkan API Key Groq atau Gemini terlebih dahulu di menu Pengaturan agar AI Coach bisa meninjau ritme mingguanmu.</string>
+    <string name="action_open_settings">Buka Pengaturan</string>
+    <string name="action_retry">Coba Lagi</string>
+</resources>

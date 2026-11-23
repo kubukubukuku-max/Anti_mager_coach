@@ -1,0 +1,129 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile and synced app preferences stored per user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID."
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["warm_cream", "deep_night"],
+          "description": "Synced visual theme preference."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Optional user display name from Google Sign-In."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Optional user email address from Google Sign-In (owner-only PII)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "themeMode", "createdAt", "updatedAt"]
+    },
+    "WorkoutSession": {
+      "title": "WorkoutSession",
+      "description": "Single recorded or synced workout session belonging to an authenticated user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID matching the parent userId path segment."
+        },
+        "externalId": {
+          "type": "string",
+          "description": "Optional external provider record ID (e.g., Health Connect or Strava) for deduplication."
+        },
+        "sportType": {
+          "type": "string",
+          "enum": ["RUNNING", "BADMINTON", "DUMBBELL", "WALKING", "REST"],
+          "description": "Type of physical activity or active rest."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["MANUAL", "STRAVA", "HEALTH"],
+          "description": "Origin of the workout session record."
+        },
+        "startedAtIso": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 timestamp indicating when the workout started."
+        },
+        "durationMin": {
+          "type": "integer",
+          "description": "Duration of the workout session in minutes (1..1440)."
+        },
+        "distanceKm": {
+          "type": "number",
+          "description": "Optional distance covered in kilometers (> 0..500)."
+        },
+        "avgHr": {
+          "type": "integer",
+          "description": "Optional average heart rate in BPM (30..240)."
+        },
+        "rpe": {
+          "type": "integer",
+          "description": "Rate of Perceived Exertion on a 1..10 scale."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional user notes or summary for the workout session."
+        },
+        "dumbbellItems": {
+          "type": "array",
+          "description": "Bounded list (max 30) of dumbbell or bodyweight exercise items performed."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modification timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "sportType",
+        "source",
+        "startedAtIso",
+        "durationMin",
+        "rpe",
+        "dumbbellItems",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Owner-only user profile document storing synced theme preference and account metadata."
+    },
+    "/users/{userId}/workouts/{workoutId}": {
+      "schema": {
+        "$ref": "#/entities/WorkoutSession"
+      },
+      "description": "User-scoped subcollection of synced workout sessions."
+    }
+  }
+}

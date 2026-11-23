@@ -1,0 +1,160 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED HELPERS ---
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- ENTITY VALIDATION BLUEPRINTS ---
+
+    function isValidUserProfile(data) {
+      return data.userId is string &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.themeMode is string &&
+             data.themeMode.size() >= 1 &&
+             data.themeMode.size() <= 32 &&
+             data.themeMode in ['warm_cream', 'deep_night'] &&
+             (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 254)) &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidWorkoutSession(data, userId) {
+      return data.userId is string &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.userId == userId &&
+             data.sportType is string &&
+             data.sportType.size() >= 1 &&
+             data.sportType.size() <= 24 &&
+             data.sportType in ['RUNNING', 'BADMINTON', 'DUMBBELL', 'WALKING', 'REST'] &&
+             data.source is string &&
+             data.source.size() >= 1 &&
+             data.source.size() <= 24 &&
+             data.source in ['MANUAL', 'STRAVA', 'HEALTH'] &&
+             data.startedAtIso is string &&
+             data.startedAtIso.size() >= 10 &&
+             data.startedAtIso.size() <= 40 &&
+             data.durationMin is int &&
+             data.durationMin >= 1 &&
+             data.durationMin <= 1440 &&
+             data.rpe is int &&
+             data.rpe >= 1 &&
+             data.rpe <= 10 &&
+             data.dumbbellItems is list &&
+             data.dumbbellItems.size() <= 30 &&
+             (data.dumbbellItems.size() == 0 || data.dumbbellItems[0] is map) &&
+             (!('externalId' in data) || data.externalId == null || (data.externalId is string && data.externalId.size() >= 1 && data.externalId.size() <= 200)) &&
+             (!('distanceKm' in data) || data.distanceKm == null || (data.distanceKm is number && data.distanceKm > 0 && data.distanceKm <= 500)) &&
+             (!('avgHr' in data) || data.avgHr == null || (data.avgHr is int && data.avgHr >= 30 && data.avgHr <= 240)) &&
+             (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 500)) &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    // --- COLLECTIONS ---
+
+    // Owner-only user profile and synced preferences (contains optional email PII)
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'themeMode', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'themeMode', 'displayName', 'email', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().keys().hasOnly(['userId', 'themeMode', 'displayName', 'email', 'createdAt', 'updatedAt']) && (
+                         // Action: Sync profile metadata & theme
+                         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'themeMode', 'updatedAt']) ||
+                         // Action: Update theme preference only
+                         incoming().diff(existing()).affectedKeys().hasOnly(['themeMode', 'updatedAt'])
+                       );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // User-scoped workout sessions subcollection
+      match /workouts/{workoutId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(workoutId);
+        allow list: if isOwner(userId) && isValidId(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(workoutId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'sportType', 'source', 'startedAtIso',
+                           'durationMin', 'rpe', 'dumbbellItems', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'externalId', 'sportType', 'source', 'startedAtIso',
+                           'durationMin', 'distanceKm', 'avgHr', 'rpe', 'notes',
+                           'dumbbellItems', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidWorkoutSession(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(workoutId) &&
+                         isValidWorkoutSession(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().keys().hasOnly([
+                           'userId', 'externalId', 'sportType', 'source', 'startedAtIso',
+                           'durationMin', 'distanceKm', 'avgHr', 'rpe', 'notes',
+                           'dumbbellItems', 'createdAt', 'updatedAt'
+                         ]) && (
+                           // Action: Re-sync metrics from Health Connect or external provider
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'durationMin', 'distanceKm', 'avgHr', 'notes', 'updatedAt'
+                           ]) ||
+                           // Action: Update workout details
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'sportType', 'startedAtIso', 'durationMin', 'distanceKm',
+                             'avgHr', 'rpe', 'notes', 'dumbbellItems', 'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(workoutId);
+      }
+    }
+  }
+}
