@@ -29,10 +29,24 @@ jobs:
         with:
           gradle-version: wrapper
 
-      - name: Decode debug keystore
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        with:
+          path: debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: Generate debug.keystore if missing
         run: |
-          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 --decode debug.keystore.base64 > debug.keystore
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
       - name: Build Debug APK
