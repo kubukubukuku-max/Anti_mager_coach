@@ -9,7 +9,6 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import com.example.R
 import com.example.data.FirebaseRepository
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -26,6 +25,19 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
+}
+
+private fun resolveDefaultWebClientId(context: Context): String {
+    return try {
+        val resId = context.resources.getIdentifier(
+            "default_web_client_id",
+            "string",
+            context.packageName
+        )
+        if (resId > 0) context.getString(resId).trim() else ""
+    } catch (_: Exception) {
+        ""
+    }
 }
 
 /**
@@ -48,9 +60,8 @@ fun attemptAutoSignIn(
         onUnauthenticated()
         return
     }
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
+    val clientId = resolveDefaultWebClientId(context)
+    if (clientId.isEmpty()) {
         onUnauthenticated()
         return
     }
@@ -101,9 +112,8 @@ fun onGoogleSignInClicked(
         onAuthError("Tidak dapat membuka dialog masuk Google dari konteks saat ini.")
         return
     }
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
+    val clientId = resolveDefaultWebClientId(context)
+    if (clientId.isEmpty()) {
         onAuthError("Konfigurasi Google Sign-In belum ditemukan (default_web_client_id).")
         return
     }
