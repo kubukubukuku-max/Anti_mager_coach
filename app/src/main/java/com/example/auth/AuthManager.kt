@@ -14,12 +14,21 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val AUTH_TAG = "Auth"
+
+private fun isFirebaseInitialized(context: Context): Boolean {
+    return try {
+        FirebaseApp.getApps(context.applicationContext).isNotEmpty()
+    } catch (_: Throwable) {
+        false
+    }
+}
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -51,6 +60,10 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
+    if (!isFirebaseInitialized(context)) {
+        onUnauthenticated()
+        return
+    }
     if (firebaseRepository.currentUser != null) {
         onAuthSuccess()
         return
@@ -107,6 +120,10 @@ fun onGoogleSignInClicked(
     scope: CoroutineScope,
     onAuthCancelled: () -> Unit = {}
 ) {
+    if (!isFirebaseInitialized(context)) {
+        onAuthError("Layanan cloud Firebase belum dikonfigurasi pada build ini.")
+        return
+    }
     val activity = context.findActivity()
     if (activity == null) {
         onAuthError("Tidak dapat membuka dialog masuk Google dari konteks saat ini.")

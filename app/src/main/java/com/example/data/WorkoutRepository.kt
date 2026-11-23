@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -15,6 +16,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -47,12 +49,15 @@ class WorkoutRepository(private val context: Context) {
     private val sessionListAdapter = moshi.adapter<List<WorkoutSession>>(sessionListType)
         .indent("  ")
 
-    val themeModeFlow: Flow<AppThemeMode> = context.workoutDataStore.data
+    private val safePreferencesFlow: Flow<Preferences> = context.workoutDataStore.data
+        .catch { emit(emptyPreferences()) }
+
+    val themeModeFlow: Flow<AppThemeMode> = safePreferencesFlow
         .map { preferences ->
             AppThemeMode.fromStorageKey(preferences[themeModeKey])
         }
 
-    val reminderSettingsFlow: Flow<ReminderSettings> = context.workoutDataStore.data
+    val reminderSettingsFlow: Flow<ReminderSettings> = safePreferencesFlow
         .map { preferences ->
             ReminderSettings(
                 enabled = preferences[reminderEnabledKey] ?: false,
@@ -79,7 +84,7 @@ class WorkoutRepository(private val context: Context) {
      * Emits all locally stored sessions sorted newest-first.
      * Starts strictly empty on fresh install (never inserts dummy data).
      */
-    val sessionsFlow: Flow<List<WorkoutSession>> = context.workoutDataStore.data
+    val sessionsFlow: Flow<List<WorkoutSession>> = safePreferencesFlow
         .map { preferences ->
             val rawJson = preferences[sessionsJsonKey]
             if (rawJson.isNullOrBlank()) {
@@ -96,6 +101,16 @@ class WorkoutRepository(private val context: Context) {
                 .distinctBy { it.id }
                 .sortedByDescending { DateTimeHelper.parseIsoToMillis(it.startedAtIso) ?: 0L }
             prefs[sessionsJsonKey] = sessionListAdapter.toJson(updated)
+        }
+    }
+
+    suspend fun updateSession(updated: WorkoutSession) {
+        context.workoutDataStore.edit { prefs ->
+            val current = parseSessionsSafely(prefs[sessionsJsonKey])
+            val replaced = current.map { existing ->
+                if (existing.id == updated.id) updated else existing
+            }.sortedByDescending { DateTimeHelper.parseIsoToMillis(it.startedAtIso) ?: 0L }
+            prefs[sessionsJsonKey] = sessionListAdapter.toJson(replaced)
         }
     }
 

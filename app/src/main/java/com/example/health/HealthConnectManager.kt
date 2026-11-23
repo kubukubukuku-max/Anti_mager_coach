@@ -37,10 +37,14 @@ class HealthConnectManager(private val context: Context) {
     )
 
     fun checkAvailability(): HealthConnectAvailability {
-        return when (HealthConnectClient.getSdkStatus(context)) {
-            HealthConnectClient.SDK_AVAILABLE -> HealthConnectAvailability.AVAILABLE
-            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> HealthConnectAvailability.UPDATE_REQUIRED
-            else -> HealthConnectAvailability.UNAVAILABLE
+        return try {
+            when (HealthConnectClient.getSdkStatus(context)) {
+                HealthConnectClient.SDK_AVAILABLE -> HealthConnectAvailability.AVAILABLE
+                HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> HealthConnectAvailability.UPDATE_REQUIRED
+                else -> HealthConnectAvailability.UNAVAILABLE
+            }
+        } catch (_: Throwable) {
+            HealthConnectAvailability.UNAVAILABLE
         }
     }
 
@@ -59,9 +63,13 @@ class HealthConnectManager(private val context: Context) {
     }
 
     private fun getClientOrNull(): HealthConnectClient? {
-        return if (checkAvailability() == HealthConnectAvailability.AVAILABLE) {
-            HealthConnectClient.getOrCreate(context)
-        } else {
+        return try {
+            if (checkAvailability() == HealthConnectAvailability.AVAILABLE) {
+                HealthConnectClient.getOrCreate(context)
+            } else {
+                null
+            }
+        } catch (_: Throwable) {
             null
         }
     }

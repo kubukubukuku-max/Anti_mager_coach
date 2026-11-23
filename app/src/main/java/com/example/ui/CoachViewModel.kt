@@ -75,6 +75,7 @@ data class CoachUiState(
     val reminderSettings: ReminderSettings = ReminderSettings(),
     val userDisplayName: String? = null,
     val userEmail: String? = null,
+    val isCloudSyncEnabled: Boolean = false,
     val cloudSyncStatus: CloudSyncStatus = CloudSyncStatus.LOADING,
     val cloudErrorMessage: String? = null,
     val isSyncingHealthConnect: Boolean = false,
@@ -91,15 +92,17 @@ data class CoachUiState(
 }
 
 class CoachViewModel(
-    private val currentUserId: String,
+    private val currentUserId: String?,
     private val userDisplayName: String?,
     private val userEmail: String?,
     private val localRepository: WorkoutRepository,
-    private val firebaseRepository: FirebaseRepository,
+    private val firebaseRepository: FirebaseRepository?,
     val healthConnectManager: HealthConnectManager,
     private val reminderScheduler: ReminderScheduler,
     private val geminiApiKeyStore: GeminiApiKeyStore
 ) : ViewModel() {
+
+    private val isCloudMode: Boolean = firebaseRepository != null && !currentUserId.isNullOrBlank()
 
     private val selectedStatus = MutableStateFlow(TodayStatus.FRESH)
     private val isSyncingCloud = MutableStateFlow(false)
@@ -113,32 +116,49 @@ class CoachViewModel(
     private val isLoadingAiSuggestions = MutableStateFlow(false)
     private val weeklyReviewState = MutableStateFlow<WeeklyReviewUiState>(WeeklyReviewUiState.Idle)
 
-    // Two-tier Flow error handling: unwraps FirebaseFirestoreException from snapshots() cancellation
-    // while re-throwing pure CancellationException so Compose collectors never crash.
+    // In Cloud Mode: observes Firestore with two-tier Flow error handling.
+    // In Local Mode (when google-services.json is absent): observes DataStore sessions directly.
     private val cloudSessionsState: StateFlow<CloudSessionsStreamState> =
-        firebaseRepository.observeWorkoutSessions(currentUserId)
-            .map<List<WorkoutSession>, CloudSessionsStreamState> { sessions ->
-                CloudSessionsStreamState.Success(sessions)
-            }
-            .catch { error ->
-                val firestoreError = generateSequence(error) { it.cause }
-                    .filterIsInstance<FirebaseFirestoreException>()
-                    .firstOrNull()
-                if (firestoreError == null && error is CancellationException) throw error
-                val rootError = firestoreError ?: error
-                Log.w(TAG, "Error observing cloud workouts", rootError)
-                emit(
-                    CloudSessionsStreamState.Error(
-                        rootError.localizedMessage
-                            ?: "Gagal memuat data cloud. Periksa koneksi internetmu."
+        if (firebaseRepository != null && !currentUserId.isNullOrBlank()) {
+            firebaseRepository.observeWorkoutSessions(currentUserId)
+                .map<List<WorkoutSession>, CloudSessionsStreamState> { sessions ->
+                    CloudSessionsStreamState.Success(sessions)
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val rootError = firestoreError ?: error
+                    Log.w(TAG, "Error observing cloud workouts", rootError)
+                    emit(
+                        CloudSessionsStreamState.Error(
+                            rootError.localizedMessage
+                                ?: "Gagal memuat data cloud. Periksa koneksi internetmu."
+                        )
                     )
+                }
+                .stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                    initialValue = CloudSessionsStreamState.Loading
                 )
-            }
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
-                initialValue = CloudSessionsStreamState.Loading
-            )
+        } else {
+            localRepository.sessionsFlow
+                .map<List<WorkoutSession>, CloudSessionsStreamState> { sessions ->
+                    CloudSessionsStreamState.Success(sessions)
+                }
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    Log.w(TAG, "Error observing local workouts", error)
+                    emit(CloudSessionsStreamState.Success(emptyList()))
+                }
+                .stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                    initialValue = CloudSessionsStreamState.Success(emptyList())
+                )
+        }
 
     private val baseFlow = combine(
         cloudSessionsState,
@@ -219,6 +239,7 @@ class CoachViewModel(
             reminderSettings = reminderSettings,
             userDisplayName = userDisplayName,
             userEmail = userEmail,
+            isCloudSyncEnabled = isCloudMode,
             cloudSyncStatus = cloudStatus,
             cloudErrorMessage = cloudError,
             isSyncingHealthConnect = hcSyncing,
@@ -236,21 +257,27 @@ class CoachViewModel(
         initialValue = CoachUiState(
             userDisplayName = userDisplayName,
             userEmail = userEmail,
+            isCloudSyncEnabled = isCloudMode,
+            cloudSyncStatus = if (isCloudMode) CloudSyncStatus.LOADING else CloudSyncStatus.SYNCED,
             aiProvider = selectedAiProvider.value,
             activeAiApiKey = activeAiApiKey.value
         )
     )
 
     init {
-        initializeCloudAccountAndMigrate()
-        observeCloudThemePreference()
+        if (isCloudMode) {
+            initializeCloudAccountAndMigrate()
+            observeCloudThemePreference()
+        }
     }
 
     private fun initializeCloudAccountAndMigrate() {
+        val repo = firebaseRepository ?: return
+        val uid = currentUserId?.takeIf { it.isNotBlank() } ?: return
         viewModelScope.launch {
             val currentLocalTheme = localRepository.themeModeFlow.first()
-            firebaseRepository.ensureUserProfile(
-                userId = currentUserId,
+            repo.ensureUserProfile(
+                userId = uid,
                 displayName = userDisplayName,
                 email = userEmail,
                 fallbackThemeMode = currentLocalTheme
@@ -261,8 +288,8 @@ class CoachViewModel(
             if (legacyLocalSessions.isNotEmpty()) {
                 isSyncingCloud.value = true
                 val existingCloud = uiState.value.allSessions
-                val migrationResult = firebaseRepository.upsertSyncedSessions(
-                    userId = currentUserId,
+                val migrationResult = repo.upsertSyncedSessions(
+                    userId = uid,
                     incomingSessions = legacyLocalSessions,
                     existingSessions = existingCloud
                 )
@@ -279,8 +306,10 @@ class CoachViewModel(
     }
 
     private fun observeCloudThemePreference() {
+        val repo = firebaseRepository ?: return
+        val uid = currentUserId?.takeIf { it.isNotBlank() } ?: return
         viewModelScope.launch {
-            firebaseRepository.observeUserThemeMode(currentUserId)
+            repo.observeUserThemeMode(uid)
                 .catch { error ->
                     val firestoreError = generateSequence(error) { it.cause }
                         .filterIsInstance<FirebaseFirestoreException>()
@@ -410,12 +439,16 @@ class CoachViewModel(
     fun setThemeMode(mode: AppThemeMode) {
         viewModelScope.launch {
             localRepository.setThemeMode(mode)
-            firebaseRepository.updateThemeMode(
-                userId = currentUserId,
-                mode = mode,
-                displayName = userDisplayName,
-                email = userEmail
-            )
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.updateThemeMode(
+                    userId = uid,
+                    mode = mode,
+                    displayName = userDisplayName,
+                    email = userEmail
+                )
+            }
         }
     }
 
@@ -462,9 +495,15 @@ class CoachViewModel(
     }
 
     fun syncCloudNow() {
+        val repo = firebaseRepository
+        val uid = currentUserId
+        if (repo == null || uid.isNullOrBlank()) {
+            snackbarMessage.value = "Aplikasi berjalan dalam Mode Lokal. Data tersimpan aman di perangkat ini."
+            return
+        }
         viewModelScope.launch {
             isSyncingCloud.value = true
-            val result = firebaseRepository.forceRefreshFromServer(currentUserId)
+            val result = repo.forceRefreshFromServer(uid)
             result.fold(
                 onSuccess = { count ->
                     snackbarMessage.value =
@@ -526,31 +565,47 @@ class CoachViewModel(
             val syncResult = healthConnectManager.syncLast14DaysWorkouts()
             syncResult.fold(
                 onSuccess = { syncedSessions ->
-                    val upsertResult = firebaseRepository.upsertSyncedSessions(
-                        userId = currentUserId,
-                        incomingSessions = syncedSessions,
-                        existingSessions = uiState.value.allSessions
-                    )
-                    upsertResult.fold(
-                        onSuccess = { newCount ->
-                            val msg = when {
-                                syncedSessions.isEmpty() ->
-                                    "Terhubung! Tidak ditemukan sesi olahraga di Health Connect dalam 14 hari terakhir."
-                                newCount > 0 ->
-                                    "Berhasil sync $newCount sesi baru dari Health Connect ke Cloud!"
-                                else ->
-                                    "Data sudah terbaru (${syncedSessions.size} sesi 14 hari terakhir sudah tersimpan di Cloud)."
+                    val repo = firebaseRepository
+                    val uid = currentUserId
+                    if (repo != null && !uid.isNullOrBlank()) {
+                        val upsertResult = repo.upsertSyncedSessions(
+                            userId = uid,
+                            incomingSessions = syncedSessions,
+                            existingSessions = uiState.value.allSessions
+                        )
+                        upsertResult.fold(
+                            onSuccess = { newCount ->
+                                val msg = when {
+                                    syncedSessions.isEmpty() ->
+                                        "Terhubung! Tidak ditemukan sesi olahraga di Health Connect dalam 14 hari terakhir."
+                                    newCount > 0 ->
+                                        "Berhasil sync $newCount sesi baru dari Health Connect ke Cloud!"
+                                    else ->
+                                        "Data sudah terbaru (${syncedSessions.size} sesi 14 hari terakhir sudah tersimpan di Cloud)."
+                                }
+                                healthConnectStatusMessage.value = msg
+                                snackbarMessage.value = msg
+                            },
+                            onFailure = { err ->
+                                val msg = err.localizedMessage
+                                    ?: "Gagal menyimpan hasil Health Connect ke cloud."
+                                healthConnectStatusMessage.value = msg
+                                snackbarMessage.value = msg
                             }
-                            healthConnectStatusMessage.value = msg
-                            snackbarMessage.value = msg
-                        },
-                        onFailure = { err ->
-                            val msg = err.localizedMessage
-                                ?: "Gagal menyimpan hasil Health Connect ke cloud."
-                            healthConnectStatusMessage.value = msg
-                            snackbarMessage.value = msg
+                        )
+                    } else {
+                        val newCount = localRepository.upsertSyncedSessions(syncedSessions)
+                        val msg = when {
+                            syncedSessions.isEmpty() ->
+                                "Terhubung! Tidak ditemukan sesi olahraga di Health Connect dalam 14 hari terakhir."
+                            newCount > 0 ->
+                                "Berhasil sync $newCount sesi baru dari Health Connect ke perangkat!"
+                            else ->
+                                "Data sudah terbaru (${syncedSessions.size} sesi 14 hari terakhir sudah tersimpan)."
                         }
-                    )
+                        healthConnectStatusMessage.value = msg
+                        snackbarMessage.value = msg
+                    }
                 },
                 onFailure = { err ->
                     val msg = err.message ?: "Gagal menyinkronkan data Health Connect."
@@ -577,18 +632,29 @@ class CoachViewModel(
                 notes = "${option.badge}: ${option.title}",
                 dumbbellItems = option.suggestedDumbbellItems
             )
-            firebaseRepository.createWorkoutSession(currentUserId, session).fold(
-                onSuccess = {
-                    snackbarMessage.value = if (isIdeal) {
-                        "Mantap! Sesi ${option.sportType.displayName} tersimpan ke cloud!"
-                    } else {
-                        "Keren banget! Anti-mager berhasil — langkah ringan hari ini tersimpan ke cloud."
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.createWorkoutSession(uid, session).fold(
+                    onSuccess = {
+                        snackbarMessage.value = if (isIdeal) {
+                            "Mantap! Sesi ${option.sportType.displayName} tersimpan ke cloud!"
+                        } else {
+                            "Keren banget! Anti-mager berhasil — langkah ringan hari ini tersimpan ke cloud."
+                        }
+                    },
+                    onFailure = {
+                        snackbarMessage.value = "Gagal menyimpan sesi ke cloud. Coba lagi sebentar lagi."
                     }
-                },
-                onFailure = {
-                    snackbarMessage.value = "Gagal menyimpan sesi ke cloud. Coba lagi sebentar lagi."
+                )
+            } else {
+                localRepository.addSession(session)
+                snackbarMessage.value = if (isIdeal) {
+                    "Mantap! Sesi ${option.sportType.displayName} tersimpan!"
+                } else {
+                    "Keren banget! Anti-mager berhasil — langkah ringan hari ini tercatat."
                 }
-            )
+            }
         }
     }
 
@@ -695,18 +761,29 @@ class CoachViewModel(
         )
         activeWorkout.value = null
         viewModelScope.launch {
-            firebaseRepository.createWorkoutSession(currentUserId, session).fold(
-                onSuccess = {
-                    snackbarMessage.value = when (current.isFromIdealSuggestion) {
-                        true -> "Mantap! Sesi ${current.sportType.displayName} ($safeDuration mnt) tercatat real-time ke cloud!"
-                        false -> "Keren banget! Langkah anti-mager ($safeDuration mnt) tersimpan ke cloud!"
-                        null -> "Hebat! Sesi ${current.sportType.displayName} ($safeDuration mnt) berhasil disimpan!"
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.createWorkoutSession(uid, session).fold(
+                    onSuccess = {
+                        snackbarMessage.value = when (current.isFromIdealSuggestion) {
+                            true -> "Mantap! Sesi ${current.sportType.displayName} ($safeDuration mnt) tercatat real-time ke cloud!"
+                            false -> "Keren banget! Langkah anti-mager ($safeDuration mnt) tersimpan ke cloud!"
+                            null -> "Hebat! Sesi ${current.sportType.displayName} ($safeDuration mnt) berhasil disimpan!"
+                        }
+                    },
+                    onFailure = {
+                        snackbarMessage.value = "Gagal menyimpan sesi ke cloud. Silakan coba lagi sebentar lagi."
                     }
-                },
-                onFailure = {
-                    snackbarMessage.value = "Gagal menyimpan sesi ke cloud. Silakan coba lagi sebentar lagi."
+                )
+            } else {
+                localRepository.addSession(session)
+                snackbarMessage.value = when (current.isFromIdealSuggestion) {
+                    true -> "Mantap! Sesi ${current.sportType.displayName} ($safeDuration mnt) tercatat real-time!"
+                    false -> "Keren banget! Langkah anti-mager ($safeDuration mnt) tersimpan!"
+                    null -> "Hebat! Sesi ${current.sportType.displayName} ($safeDuration mnt) berhasil disimpan!"
                 }
-            )
+            }
         }
     }
 
@@ -738,15 +815,23 @@ class CoachViewModel(
                     emptyList()
                 }
             )
-            firebaseRepository.createWorkoutSession(currentUserId, session).fold(
-                onSuccess = {
-                    snackbarMessage.value =
-                        "Sesi ${sportType.displayName} (${session.durationMin} menit) tersimpan di cloud!"
-                },
-                onFailure = {
-                    snackbarMessage.value = "Gagal menyimpan latihan ke cloud. Silakan coba lagi."
-                }
-            )
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.createWorkoutSession(uid, session).fold(
+                    onSuccess = {
+                        snackbarMessage.value =
+                            "Sesi ${sportType.displayName} (${session.durationMin} menit) tersimpan di cloud!"
+                    },
+                    onFailure = {
+                        snackbarMessage.value = "Gagal menyimpan latihan ke cloud. Silakan coba lagi."
+                    }
+                )
+            } else {
+                localRepository.addSession(session)
+                snackbarMessage.value =
+                    "Sesi ${sportType.displayName} (${session.durationMin} menit) berhasil disimpan!"
+            }
         }
     }
 
@@ -774,28 +859,43 @@ class CoachViewModel(
                     emptyList()
                 }
             )
-            firebaseRepository.updateWorkoutSession(currentUserId, updated).fold(
-                onSuccess = {
-                    snackbarMessage.value =
-                        "Perubahan sesi ${sportType.displayName} berhasil disimpan ke cloud."
-                },
-                onFailure = {
-                    snackbarMessage.value = "Gagal memperbarui sesi di cloud. Silakan coba lagi."
-                }
-            )
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.updateWorkoutSession(uid, updated).fold(
+                    onSuccess = {
+                        snackbarMessage.value =
+                            "Perubahan sesi ${sportType.displayName} berhasil disimpan ke cloud."
+                    },
+                    onFailure = {
+                        snackbarMessage.value = "Gagal memperbarui sesi di cloud. Silakan coba lagi."
+                    }
+                )
+            } else {
+                localRepository.updateSession(updated)
+                snackbarMessage.value =
+                    "Perubahan sesi ${sportType.displayName} berhasil disimpan."
+            }
         }
     }
 
     fun deleteSession(sessionId: String) {
         viewModelScope.launch {
-            firebaseRepository.deleteWorkoutSession(currentUserId, sessionId).fold(
-                onSuccess = {
-                    snackbarMessage.value = "Catatan sesi berhasil dihapus dari cloud."
-                },
-                onFailure = {
-                    snackbarMessage.value = "Gagal menghapus catatan sesi. Silakan coba lagi."
-                }
-            )
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.deleteWorkoutSession(uid, sessionId).fold(
+                    onSuccess = {
+                        snackbarMessage.value = "Catatan sesi berhasil dihapus dari cloud."
+                    },
+                    onFailure = {
+                        snackbarMessage.value = "Gagal menghapus catatan sesi. Silakan coba lagi."
+                    }
+                )
+            } else {
+                localRepository.deleteSession(sessionId)
+                snackbarMessage.value = "Catatan sesi berhasil dihapus."
+            }
         }
     }
 
@@ -804,28 +904,41 @@ class CoachViewModel(
             val parsed = localRepository.parseSessionsJson(rawJson)
             parsed.fold(
                 onSuccess = { importedList ->
-                    val upsertResult = firebaseRepository.upsertSyncedSessions(
-                        userId = currentUserId,
-                        incomingSessions = importedList,
-                        existingSessions = uiState.value.allSessions
-                    )
-                    upsertResult.fold(
-                        onSuccess = { count ->
-                            val msg = if (count > 0) {
-                                "Berhasil mengimpor $count sesi latihan baru ke cloud."
-                            } else {
-                                "Tidak ada sesi baru ditambahkan (semua data sudah ada di cloud)."
+                    val repo = firebaseRepository
+                    val uid = currentUserId
+                    if (repo != null && !uid.isNullOrBlank()) {
+                        val upsertResult = repo.upsertSyncedSessions(
+                            userId = uid,
+                            incomingSessions = importedList,
+                            existingSessions = uiState.value.allSessions
+                        )
+                        upsertResult.fold(
+                            onSuccess = { count ->
+                                val msg = if (count > 0) {
+                                    "Berhasil mengimpor $count sesi latihan baru ke cloud."
+                                } else {
+                                    "Tidak ada sesi baru ditambahkan (semua data sudah ada di cloud)."
+                                }
+                                snackbarMessage.value = msg
+                                onResult(true, msg)
+                            },
+                            onFailure = { err ->
+                                onResult(
+                                    false,
+                                    err.localizedMessage ?: "Gagal mengunggah data JSON ke cloud."
+                                )
                             }
-                            snackbarMessage.value = msg
-                            onResult(true, msg)
-                        },
-                        onFailure = { err ->
-                            onResult(
-                                false,
-                                err.localizedMessage ?: "Gagal mengunggah data JSON ke cloud."
-                            )
+                        )
+                    } else {
+                        val count = localRepository.upsertSyncedSessions(importedList)
+                        val msg = if (count > 0) {
+                            "Berhasil mengimpor $count sesi latihan baru ke perangkat."
+                        } else {
+                            "Tidak ada sesi baru ditambahkan (semua data sudah ada)."
                         }
-                    )
+                        snackbarMessage.value = msg
+                        onResult(true, msg)
+                    }
                 },
                 onFailure = { error ->
                     onResult(false, error.message ?: "Gagal mengimpor JSON.")
@@ -843,15 +956,22 @@ class CoachViewModel(
 
     fun clearAllSessions() {
         viewModelScope.launch {
-            firebaseRepository.clearAllWorkoutSessions(currentUserId).fold(
-                onSuccess = {
-                    localRepository.clearAllSessions()
-                    snackbarMessage.value = "Semua riwayat latihan di cloud telah dibersihkan."
-                },
-                onFailure = {
-                    snackbarMessage.value = "Gagal membersihkan riwayat cloud. Silakan coba lagi."
-                }
-            )
+            val repo = firebaseRepository
+            val uid = currentUserId
+            if (repo != null && !uid.isNullOrBlank()) {
+                repo.clearAllWorkoutSessions(uid).fold(
+                    onSuccess = {
+                        localRepository.clearAllSessions()
+                        snackbarMessage.value = "Semua riwayat latihan di cloud telah dibersihkan."
+                    },
+                    onFailure = {
+                        snackbarMessage.value = "Gagal membersihkan riwayat cloud. Silakan coba lagi."
+                    }
+                )
+            } else {
+                localRepository.clearAllSessions()
+                snackbarMessage.value = "Semua riwayat latihan lokal telah dibersihkan."
+            }
         }
     }
 

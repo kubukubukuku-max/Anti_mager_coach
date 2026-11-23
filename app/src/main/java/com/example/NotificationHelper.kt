@@ -43,29 +43,35 @@ object NotificationHelper {
      * sound and vibration so banners/heads-up notifications appear reliably on Android 10+.
      */
     fun createNotificationChannel(context: Context) {
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            ?: return
+        try {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
 
-        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val audioAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
 
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = CHANNEL_DESCRIPTION
-            enableVibration(true)
-            vibrationPattern = longArrayOf(0L, 250L, 120L, 250L)
-            enableLights(true)
-            setShowBadge(true)
-            setSound(soundUri, audioAttributes)
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = CHANNEL_DESCRIPTION
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0L, 250L, 120L, 250L)
+                enableLights(true)
+                setShowBadge(true)
+                if (soundUri != null) {
+                    setSound(soundUri, audioAttributes)
+                }
+            }
+
+            manager.createNotificationChannel(channel)
+        } catch (_: Throwable) {
+            // Avoid startup crash on restricted ROMs or tablets
         }
-
-        manager.createNotificationChannel(channel)
     }
 
     /**

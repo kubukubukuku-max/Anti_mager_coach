@@ -97,6 +97,7 @@ import com.example.ui.theme.WarmTerracotta
 @Composable
 fun SettingsSyncBottomSheet(
     totalSessionsCount: Int,
+    isCloudSyncEnabled: Boolean = true,
     userDisplayName: String?,
     userEmail: String?,
     cloudSyncStatus: CloudSyncStatus,
@@ -168,15 +169,17 @@ fun SettingsSyncBottomSheet(
                 }
             }
 
-            // Cloud Sync & Google Account Card
-            CloudAccountSyncCard(
-                userDisplayName = userDisplayName,
-                userEmail = userEmail,
-                totalSessionsCount = totalSessionsCount,
-                cloudSyncStatus = cloudSyncStatus,
-                onSyncCloudNow = onSyncCloudNow,
-                onSignOutRequest = { showSignOutConfirmDialog = true }
-            )
+            // Cloud Sync & Google Account Card (shown only when Firebase is configured)
+            if (isCloudSyncEnabled) {
+                CloudAccountSyncCard(
+                    userDisplayName = userDisplayName,
+                    userEmail = userEmail,
+                    totalSessionsCount = totalSessionsCount,
+                    cloudSyncStatus = cloudSyncStatus,
+                    onSyncCloudNow = onSyncCloudNow,
+                    onSignOutRequest = { showSignOutConfirmDialog = true }
+                )
+            }
 
             // Multi-Provider AI Coach Card (Groq Default + Gemini Backup, Local SharedPreferences only)
             GeminiAiSettingsCard(
@@ -237,13 +240,21 @@ fun SettingsSyncBottomSheet(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "$totalSessionsCount sesi tersimpan di Cloud",
+                            text = if (isCloudSyncEnabled) {
+                                "$totalSessionsCount sesi tersimpan di Cloud"
+                            } else {
+                                "$totalSessionsCount sesi tersimpan di perangkat (Mode Lokal)"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = stringResource(R.string.settings_storage_info),
+                            text = if (isCloudSyncEnabled) {
+                                stringResource(R.string.settings_storage_info)
+                            } else {
+                                "Riwayat latihan dan pengaturan tersimpan aman secara lokal di perangkat ini. Gunakan Ekspor JSON di bawah untuk cadangan manual."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

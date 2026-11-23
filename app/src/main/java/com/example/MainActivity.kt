@@ -23,7 +23,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -38,13 +37,14 @@ import com.example.ui.CoachScreen
 import com.example.ui.CoachViewModel
 import com.example.ui.theme.AntiMagerCoachTheme
 import com.example.ui.theme.AppThemeMode
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val localRepository by lazy { WorkoutRepository(applicationContext) }
-    private val firebaseRepository by lazy { FirebaseRepository(applicationContext) }
+    private val firebaseRepository: FirebaseRepository? by lazy {
+        FirebaseRepository.createOrNull(applicationContext)
+    }
     private val healthConnectManager by lazy { HealthConnectManager(applicationContext) }
     private val reminderScheduler by lazy { ReminderScheduler(applicationContext) }
     private val geminiApiKeyStore by lazy { GeminiApiKeyStore(applicationContext) }
@@ -139,19 +139,61 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppNavigation(
     localRepository: WorkoutRepository,
-    firebaseRepository: FirebaseRepository,
+    firebaseRepository: FirebaseRepository?,
     healthConnectManager: HealthConnectManager,
     reminderScheduler: ReminderScheduler,
     geminiApiKeyStore: GeminiApiKeyStore,
     localThemeMode: AppThemeMode,
     onLocalThemeChange: (AppThemeMode) -> Unit
 ) {
+    // If Firebase is not configured (e.g. APK built without google-services.json),
+    // skip the login gate and launch directly into CoachScreen in Local Mode.
+    if (firebaseRepository == null) {
+        key("local_mode") {
+            val viewModel: CoachViewModel = viewModel(
+                key = "local_mode",
+                factory = viewModelFactory {
+                    initializer {
+                        CoachViewModel(
+                            currentUserId = null,
+                            userDisplayName = null,
+                            userEmail = null,
+                            localRepository = localRepository,
+                            firebaseRepository = null,
+                            healthConnectManager = healthConnectManager,
+                            reminderScheduler = reminderScheduler,
+                            geminiApiKeyStore = geminiApiKeyStore
+                        )
+                    }
+                }
+            )
+            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+            AntiMagerCoachTheme(
+                themeMode = uiState.themeMode,
+                onThemeModeChange = viewModel::setThemeMode
+            ) {
+                CoachScreen(
+                    viewModel = viewModel,
+                    onSignOut = {}
+                )
+            }
+        }
+        return
+    }
+
     val currentUser by firebaseRepository.observeAuthState().collectAsStateWithLifecycle(
         initialValue = firebaseRepository.currentUser
     )
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val credentialManager = remember(context) {
+        try {
+            CredentialManager.create(context)
+        } catch (_: Throwable) {
+            null
+        }
+    }
     var skipAutoSignIn by remember { mutableStateOf(false) }
 
     val user = currentUser
@@ -177,17 +219,12 @@ private fun AppNavigation(
                 key = uid,
                 factory = viewModelFactory {
                     initializer {
-                        val app = checkNotNull(this[APPLICATION_KEY]) {
-                            "APPLICATION_KEY missing from CreationExtras"
-                        }
-                        val databaseId = app.getString(R.string.firestore_database_id)
-                        val firestore = FirebaseFirestore.getInstance(databaseId)
                         CoachViewModel(
                             currentUserId = uid,
                             userDisplayName = user.displayName,
                             userEmail = user.email,
                             localRepository = localRepository,
-                            firebaseRepository = FirebaseRepository(firestore),
+                            firebaseRepository = firebaseRepository,
                             healthConnectManager = healthConnectManager,
                             reminderScheduler = reminderScheduler,
                             geminiApiKeyStore = geminiApiKeyStore
@@ -205,11 +242,16 @@ private fun AppNavigation(
                     viewModel = viewModel,
                     onSignOut = {
                         skipAutoSignIn = true
-                        signOutGoogleAccount(
-                            credentialManager = credentialManager,
-                            firebaseRepository = firebaseRepository,
-                            scope = scope
-                        )
+                        val manager = credentialManager
+                        if (manager != null) {
+                            signOutGoogleAccount(
+                                credentialManager = manager,
+                                firebaseRepository = firebaseRepository,
+                                scope = scope
+                            )
+                        } else {
+                            firebaseRepository.signOut()
+                        }
                     }
                 )
             }

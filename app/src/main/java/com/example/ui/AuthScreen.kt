@@ -71,7 +71,13 @@ fun AuthScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val credentialManager = remember(context) {
+        try {
+            CredentialManager.create(context)
+        } catch (_: Throwable) {
+            null
+        }
+    }
     val extendedColors = AntiMagerTheme.extendedColors
     val themeController = AntiMagerTheme.controller
 
@@ -79,8 +85,8 @@ fun AuthScreen(
     var isCheckingSilentAuth by remember { mutableStateOf(!skipAutoSignIn) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(skipAutoSignIn) {
-        if (skipAutoSignIn) {
+    LaunchedEffect(skipAutoSignIn, credentialManager) {
+        if (skipAutoSignIn || credentialManager == null) {
             isCheckingSilentAuth = false
         } else {
             attemptAutoSignIn(
@@ -232,10 +238,15 @@ fun AuthScreen(
                 Button(
                     onClick = {
                         errorMessage = null
+                        val manager = credentialManager
+                        if (manager == null) {
+                            errorMessage = "Layanan Google Sign-In tidak tersedia di perangkat ini."
+                            return@Button
+                        }
                         isLoading = true
                         onGoogleSignInClicked(
                             context = context,
-                            credentialManager = credentialManager,
+                            credentialManager = manager,
                             firebaseRepository = firebaseRepository,
                             onAuthSuccess = {
                                 isLoading = false

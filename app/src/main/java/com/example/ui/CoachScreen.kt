@@ -569,6 +569,7 @@ fun CoachScreen(
         }
         SettingsSyncBottomSheet(
             totalSessionsCount = uiState.allSessions.size,
+            isCloudSyncEnabled = uiState.isCloudSyncEnabled,
             userDisplayName = uiState.userDisplayName,
             userEmail = uiState.userEmail,
             cloudSyncStatus = uiState.cloudSyncStatus,

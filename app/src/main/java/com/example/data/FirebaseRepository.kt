@@ -1,20 +1,19 @@
 package com.example.data
 
 import android.content.Context
+import android.util.Log
 import androidx.annotation.Keep
-import com.example.R
 import com.example.domain.DateTimeHelper
 import com.example.model.DumbbellItem
 import com.example.model.SessionSource
 import com.example.model.SportType
 import com.example.model.WorkoutSession
 import com.example.ui.theme.AppThemeMode
-import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -84,18 +83,17 @@ data class WorkoutSessionDoc(
  */
 class FirebaseRepository(
     private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val auth: FirebaseAuth
 ) {
-    constructor(context: Context) : this(
-        db = FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
 
     // --- FIREBASE AUTHENTICATION ---
 
     val currentUser: FirebaseUser?
-        get() = auth.currentUser
+        get() = try {
+            auth.currentUser
+        } catch (_: Throwable) {
+            null
+        }
 
     /**
      * Reactive stream emitting authentication state changes whenever the user signs in or out.
@@ -104,8 +102,18 @@ class FirebaseRepository(
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             trySend(firebaseAuth.currentUser)
         }
-        auth.addAuthStateListener(listener)
-        awaitClose { auth.removeAuthStateListener(listener) }
+        try {
+            auth.addAuthStateListener(listener)
+        } catch (_: Throwable) {
+            trySend(null)
+        }
+        awaitClose {
+            try {
+                auth.removeAuthStateListener(listener)
+            } catch (_: Throwable) {
+                // Ignore cleanup failure
+            }
+        }
     }
 
     /**
@@ -128,7 +136,11 @@ class FirebaseRepository(
     }
 
     fun signOut() {
-        auth.signOut()
+        try {
+            auth.signOut()
+        } catch (_: Throwable) {
+            // Safe no-op if FirebaseAuth is unavailable
+        }
     }
 
     private fun requireMatchingUserId(expectedUserId: String): String {
@@ -617,9 +629,55 @@ class FirebaseRepository(
     }
 
     companion object {
+        private const val TAG = "FirebaseRepository"
         private const val COLLECTION_USERS = "users"
         private const val COLLECTION_WORKOUTS = "workouts"
         private const val MAX_BATCH_OPS = 450
         private val DOC_ID_REGEX = Regex("^[a-zA-Z0-9_\\-]+$")
+
+        /**
+         * Safely checks whether a default [FirebaseApp] is configured (i.e. `google-services.json`
+         * was present at build time) without crashing when Firebase is unconfigured.
+         */
+        fun isFirebaseAvailable(context: Context): Boolean {
+            return try {
+                val appContext = context.applicationContext
+                if (FirebaseApp.getApps(appContext).isNotEmpty()) {
+                    true
+                } else {
+                    FirebaseApp.initializeApp(appContext) != null
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "FirebaseApp is not configured on this build: ${e.message}")
+                false
+            }
+        }
+
+        /**
+         * Creates a [FirebaseRepository] only if Firebase is initialized and valid.
+         * Returns `null` cleanly when `google-services.json` is absent so the app launches in Local Mode.
+         */
+        fun createOrNull(context: Context): FirebaseRepository? {
+            val appContext = context.applicationContext
+            if (!isFirebaseAvailable(appContext)) return null
+            return try {
+                val dbIdRes = appContext.resources.getIdentifier(
+                    "firestore_database_id",
+                    "string",
+                    appContext.packageName
+                )
+                val databaseId = if (dbIdRes > 0) appContext.getString(dbIdRes).trim() else ""
+                val firestore = if (databaseId.isNotEmpty()) {
+                    FirebaseFirestore.getInstance(databaseId)
+                } else {
+                    FirebaseFirestore.getInstance()
+                }
+                val firebaseAuth = FirebaseAuth.getInstance()
+                FirebaseRepository(db = firestore, auth = firebaseAuth)
+            } catch (e: Throwable) {
+                Log.w(TAG, "Unable to initialize Firebase services; falling back to local mode.", e)
+                null
+            }
+        }
     }
 }
