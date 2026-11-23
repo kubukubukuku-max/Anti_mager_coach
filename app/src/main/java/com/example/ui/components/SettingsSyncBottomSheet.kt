@@ -79,6 +79,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.AiProvider
 import com.example.R
+import com.example.data.AppBackupSnapshot
 import com.example.data.ReminderSettings
 import com.example.health.HealthConnectAvailability
 import com.example.ui.CloudSyncStatus
@@ -117,6 +118,9 @@ fun SettingsSyncBottomSheet(
     onSyncHealthConnect: () -> Unit,
     onInstallHealthConnect: () -> Unit,
     onDismiss: () -> Unit,
+    onBuildBackupJson: () -> String,
+    onParseBackupJson: (String) -> Result<AppBackupSnapshot>,
+    onRestoreFromBackup: (AppBackupSnapshot, (Boolean, String) -> Unit) -> Unit,
     onExportJson: (onReady: (String) -> Unit) -> Unit,
     onImportJson: (String, (Boolean, String) -> Unit) -> Unit,
     onClearAll: () -> Unit,
@@ -261,6 +265,15 @@ fun SettingsSyncBottomSheet(
                     }
                 }
             }
+
+            // Backup & Pulihkan Data Card (SAF CreateDocument & OpenDocument)
+            BackupRestoreCard(
+                currentSessionsCount = totalSessionsCount,
+                onBuildBackupJson = onBuildBackupJson,
+                onParseBackupJson = onParseBackupJson,
+                onConfirmRestore = onRestoreFromBackup,
+                onShowMessage = onShowMessage
+            )
 
             // Export JSON backup card
             Surface(

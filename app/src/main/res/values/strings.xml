@@ -63,13 +63,19 @@
     <!-- Settings / Sync -->
     <string name="settings_title">Pengaturan &amp; Sync Data</string>
     <string name="settings_storage_info">Data tersinkronisasi aman ke Firebase Cloud Firestore dan tetap bisa diakses di perangkat lain saat masuk dengan akun Google yang sama.</string>
-    <string name="settings_export_title">Ekspor Cadangan JSON</string>
-    <string name="settings_export_subtitle">Salin atau bagikan daftar sesi dalam format JSON</string>
+    <string name="settings_backup_title">Backup &amp; Pulihkan Data</string>
+    <string name="settings_backup_subtitle">Simpan riwayat latihan, ritme, &amp; preferensi ke file .json (tanpa API Key) atau pulihkan dari HP / Google Drive.</string>
+    <string name="action_save_backup_file">Simpan Backup (.json)</string>
+    <string name="action_restore_backup_file">Pulihkan dari Backup</string>
+    <string name="restore_confirm_title">Timpa &amp; Pulihkan Data?</string>
+    <string name="restore_confirm_action">Ya, Pulihkan</string>
+    <string name="settings_export_title">Ekspor Cepat JSON</string>
+    <string name="settings_export_subtitle">Salin atau bagikan cadangan data dalam format JSON</string>
     <string name="settings_import_title">Impor Data JSON (Strava / Health / Cadangan)</string>
-    <string name="settings_import_subtitle">Tempel array JSON sesi latihan untuk digabungkan ke cloud tanpa duplikat</string>
+    <string name="settings_import_subtitle">Tempel array JSON sesi latihan untuk digabungkan tanpa duplikat</string>
     <string name="settings_clear_title">Bersihkan Semua Riwayat</string>
     <string name="settings_clear_confirm_title">Hapus semua catatan?</string>
-    <string name="settings_clear_confirm_body">Semua sesi latihan di akun cloud-mu akan dihapus permanen dan riwayat kembali kosong.</string>
+    <string name="settings_clear_confirm_body">Semua sesi latihan akan dihapus permanen dan riwayat kembali kosong.</string>
 
     <!-- Exercise Guide Dialog -->
     <string name="guide_dialog_kicker">Panduan Gerakan Ramah Pemula</string>

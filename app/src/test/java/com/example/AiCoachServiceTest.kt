@@ -125,4 +125,94 @@ class AiCoachServiceTest {
         assertTrue(rec!!.isAiGenerated)
         assertTrue(rec.contextSummary.contains("Groq AI"))
     }
+
+    @Test
+    fun gskApiKeyForcesGroqRoutingEvenWhenGeminiSelected() {
+        assertEquals(
+            AiProvider.GROQ,
+            AiCoachService.resolveEffectiveProvider(AiProvider.GEMINI, "gsk_test123456")
+        )
+        assertEquals(
+            AiProvider.GROQ,
+            AiCoachService.resolveEffectiveProvider(AiProvider.GEMINI, "  gsk_with_spaces  ")
+        )
+        assertEquals(
+            AiProvider.GEMINI,
+            AiCoachService.resolveEffectiveProvider(AiProvider.GEMINI, "AIzaSyExampleKey")
+        )
+        assertEquals(
+            listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant"),
+            AiCoachService.GROQ_MODEL_LIST
+        )
+        assertEquals(
+            "https://api.groq.com/openai/v1/models",
+            AiCoachService.GROQ_MODELS_ENDPOINT
+        )
+    }
+
+    @Test
+    fun selectFirstActiveGroqChatModelSkipsWhisperTtsGuardAudioAndTriedModels() {
+        val modelsJson = """
+            {
+              "data": [
+                { "id": "whisper-large-v3", "active": true },
+                { "id": "playai-tts", "active": true },
+                { "id": "llama-guard-3-8b", "active": true },
+                { "id": "distil-whisper-audio-en", "active": true },
+                { "id": "llama-3.3-70b-versatile", "active": true },
+                { "id": "inactive-chat-model", "active": false },
+                { "id": "qwen-qwq-32b", "active": true }
+              ]
+            }
+        """.trimIndent()
+
+        val selected = AiCoachService.selectFirstActiveGroqChatModel(
+            modelsResponseJson = modelsJson,
+            excludeModels = setOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
+        )
+        assertEquals("qwen-qwq-32b", selected)
+    }
+
+    @Test
+    fun groq404FallsBackToInstantThenDiscoversActiveChatModel() = runBlocking {
+        val calledModels = mutableListOf<String>()
+        var discoveryCalled = false
+
+        val result = AiCoachService.executeGroqWithFallbackAndDiscovery(
+            models = AiCoachService.GROQ_MODEL_LIST,
+            delayFn = {},
+            discoverChatModelFn = { tried ->
+                discoveryCalled = true
+                assertTrue("llama-3.3-70b-versatile" in tried)
+                assertTrue("llama-3.1-8b-instant" in tried)
+                "llama3-70b-8192"
+            },
+            invoker = { model ->
+                calledModels.add(model)
+                if (model == "llama3-70b-8192") {
+                    AiCoachService.GroqAttemptResult.Success("{\"ok\":true}")
+                } else {
+                    AiCoachService.GroqAttemptResult.ModelNotFoundFailure("Groq AI (404): model not found")
+                }
+            }
+        )
+
+        assertTrue(discoveryCalled)
+        assertEquals(
+            listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"),
+            calledModels
+        )
+        assertTrue(result is GeminiCoachService.GeminiHttpResult.Success)
+        assertEquals("llama3-70b-8192", (result as GeminiCoachService.GeminiHttpResult.Success).modelUsed)
+    }
+
+    @Test
+    fun extractServerErrorMessageReadsGroqAndGeminiErrorJson() {
+        val groqErr = """{"error":{"message":"The model `old-model` does not exist","type":"invalid_request_error"}}"""
+        assertEquals(
+            "The model `old-model` does not exist",
+            AiCoachService.extractServerErrorMessage(groqErr)
+        )
+        assertEquals(null, AiCoachService.extractServerErrorMessage("not json"))
+    }
 }

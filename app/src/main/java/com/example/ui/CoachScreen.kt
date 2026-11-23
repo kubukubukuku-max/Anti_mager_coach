@@ -629,6 +629,11 @@ fun CoachScreen(
                 }
             },
             onDismiss = { showSettingsSheet = false },
+            onBuildBackupJson = { viewModel.buildFullBackupJson() },
+            onParseBackupJson = { raw -> viewModel.parseBackupJson(raw) },
+            onRestoreFromBackup = { snapshot, callback ->
+                viewModel.restoreFromBackup(snapshot, callback)
+            },
             onExportJson = { onReady -> viewModel.exportSessionsJson(onReady) },
             onImportJson = { raw, callback -> viewModel.importSessionsJson(raw, callback) },
             onClearAll = { viewModel.clearAllSessions() },

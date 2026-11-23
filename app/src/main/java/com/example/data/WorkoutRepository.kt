@@ -168,6 +168,19 @@ class WorkoutRepository(private val context: Context) {
         }
     }
 
+    suspend fun replaceAllSessions(sessions: List<WorkoutSession>) {
+        val sorted = sessions
+            .distinctBy { it.id }
+            .sortedByDescending { DateTimeHelper.parseIsoToMillis(it.startedAtIso) ?: 0L }
+        context.workoutDataStore.edit { prefs ->
+            if (sorted.isEmpty()) {
+                prefs.remove(sessionsJsonKey)
+            } else {
+                prefs[sessionsJsonKey] = sessionListAdapter.toJson(sorted)
+            }
+        }
+    }
+
     suspend fun exportSessionsJson(): String {
         val current = sessionsFlow.first()
         return sessionListAdapter.toJson(current)

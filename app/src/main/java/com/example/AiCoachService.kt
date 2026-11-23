@@ -4,7 +4,10 @@ import com.example.domain.CoachingEngine
 import com.example.model.DailyRecommendation
 import com.example.model.TodayStatus
 import com.example.model.WorkoutSession
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,16 +40,50 @@ enum class AiProvider(
 
 /**
  * Layanan Multi-Provider AI untuk Anti-Mager Coach:
- * - Groq (Default): endpoint OpenAI-compatible Chat Completions dengan model llama-3.3-70b-versatile
- * - Gemini (Cadangan): delegasi ke [GeminiCoachService] dengan auto-retry & fallback model Flash
+ * - Groq (Default): endpoint https://api.groq.com/openai/v1/chat/completions
+ *   dengan model utama llama-3.3-70b-versatile, cadangan llama-3.1-8b-instant,
+ *   serta auto-discovery via GET /openai/v1/models bila menerima HTTP 404.
+ * - Auto-routing: API Key yang diawali "gsk_" otomatis dipaksa ke endpoint Groq.
+ * - Gemini (Cadangan): delegasi ke [GeminiCoachService] dengan auto-retry & fallback model Flash.
  */
 object AiCoachService {
 
     const val GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+    const val GROQ_MODELS_ENDPOINT = "https://api.groq.com/openai/v1/models"
     const val GROQ_MODEL_NAME = "llama-3.3-70b-versatile"
+    const val GROQ_FALLBACK_MODEL_NAME = "llama-3.1-8b-instant"
+
+    val GROQ_MODEL_LIST: List<String> = listOf(
+        GROQ_MODEL_NAME,
+        GROQ_FALLBACK_MODEL_NAME
+    )
+
+    private val EXCLUDED_GROQ_MODEL_KEYWORDS = listOf(
+        "whisper",
+        "tts",
+        "guard",
+        "audio"
+    )
 
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 35_000
+
+    private val moshiMapAdapter = Moshi.Builder().build().adapter<Map<String, Any?>>(
+        Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+    )
+
+    /**
+     * Memastikan API Key yang diawali `gsk_` selalu diarahkan ke endpoint Groq,
+     * meskipun pengguna sebelumnya memilih tab Gemini.
+     */
+    fun resolveEffectiveProvider(requestedProvider: AiProvider, apiKey: String): AiProvider {
+        val cleanKey = apiKey.trim()
+        return if (cleanKey.startsWith("gsk_")) {
+            AiProvider.GROQ
+        } else {
+            requestedProvider
+        }
+    }
 
     suspend fun generateDailySuggestions(
         provider: AiProvider = AiProvider.GROQ,
@@ -77,13 +114,14 @@ object AiCoachService {
         nowMillis: Long = System.currentTimeMillis()
     ): DailySuggestionsResult {
         val cleanKey = apiKey.trim()
+        val effectiveProvider = resolveEffectiveProvider(provider, cleanKey)
         if (cleanKey.isEmpty()) {
             return DailySuggestionsResult.FallbackToLocal(
-                friendlyMessage = "Isi API Key ${provider.displayName} di Pengaturan terlebih dahulu."
+                friendlyMessage = "Isi API Key ${effectiveProvider.displayName} di Pengaturan terlebih dahulu."
             )
         }
 
-        return when (provider) {
+        return when (effectiveProvider) {
             AiProvider.GEMINI -> GeminiCoachService.generateDailySuggestionsDetailed(
                 apiKey = cleanKey,
                 sessions = sessions,
@@ -106,13 +144,14 @@ object AiCoachService {
         nowMillis: Long = System.currentTimeMillis()
     ): WeeklyReviewResult {
         val cleanKey = apiKey.trim()
+        val effectiveProvider = resolveEffectiveProvider(provider, cleanKey)
         if (cleanKey.isEmpty()) {
             return WeeklyReviewResult.Error(
-                "API Key ${provider.displayName} belum diisi. Silakan masukkan API Key di Pengaturan terlebih dahulu."
+                "API Key ${effectiveProvider.displayName} belum diisi. Silakan masukkan API Key di Pengaturan terlebih dahulu."
             )
         }
 
-        return when (provider) {
+        return when (effectiveProvider) {
             AiProvider.GEMINI -> GeminiCoachService.generateWeeklyReview(
                 apiKey = cleanKey,
                 sessions = sessions,
@@ -189,6 +228,150 @@ object AiCoachService {
         """.trimIndent()
     }
 
+    /**
+     * Mengekstrak `error.message` (atau `message`) secara ringkas dari respons error JSON server
+     * agar bisa ditampilkan singkat di UI sebelum fallback ke CoachingEngine lokal.
+     */
+    internal fun extractServerErrorMessage(rawErrorBody: String?): String? {
+        if (rawErrorBody.isNullOrBlank()) return null
+        return try {
+            val root = moshiMapAdapter.fromJson(rawErrorBody.trim()) ?: return null
+            val errorObj = root["error"] as? Map<*, *>
+            val nestedMessage = (errorObj?.get("message") as? String)?.trim()
+            val topMessage = (root["message"] as? String)?.trim()
+            val chosen = when {
+                !nestedMessage.isNullOrEmpty() -> nestedMessage
+                !topMessage.isNullOrEmpty() -> topMessage
+                else -> null
+            }
+            chosen?.replace(Regex("\\s+"), " ")?.take(140)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Memilih model chat aktif pertama dari JSON respons `GET https://api.groq.com/openai/v1/models`,
+     * mengabaikan model yang mengandung kata `whisper`, `tts`, `guard`, atau `audio`,
+     * serta melewati model yang sudah dicoba sebelumnya.
+     */
+    internal fun selectFirstActiveGroqChatModel(
+        modelsResponseJson: String,
+        excludeModels: Set<String> = emptySet()
+    ): String? {
+        return try {
+            val root = moshiMapAdapter.fromJson(modelsResponseJson.trim()) ?: return null
+            val data = root["data"] as? List<*> ?: return null
+            val excludedLower = excludeModels.map { it.lowercase() }.toSet()
+
+            for (entry in data) {
+                val item = entry as? Map<*, *> ?: continue
+                val activeVal = item["active"]
+                if (activeVal is Boolean && !activeVal) continue
+                val id = (item["id"] as? String)?.trim().orEmpty()
+                if (id.isEmpty()) continue
+                val lower = id.lowercase()
+                if (lower in excludedLower) continue
+                if (EXCLUDED_GROQ_MODEL_KEYWORDS.any { keyword -> lower.contains(keyword) }) {
+                    continue
+                }
+                return id
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal sealed class GroqAttemptResult {
+        data class Success(val text: String) : GroqAttemptResult()
+        data class RetryableFailure(val statusCode: Int, val userMessage: String) : GroqAttemptResult()
+        data class ModelNotFoundFailure(val userMessage: String) : GroqAttemptResult()
+        data class NonRetryableFailure(val userMessage: String) : GroqAttemptResult()
+    }
+
+    /**
+     * Orkestrasi panggilan Groq AI:
+     * 1. Coba berurutan `llama-3.3-70b-versatile` lalu `llama-3.1-8b-instant`.
+     * 2. Jika 503/429 -> auto-retry hingga [maxRetries] kali dengan jeda [retryDelayMs], lalu pindah model cadangan.
+     * 3. Jika 404 -> langsung coba model cadangan; jika semua model default 404, otomatis panggil
+     *    `GET /openai/v1/models` untuk menemukan model chat aktif pertama lalu ulangi request.
+     * 4. Jika tetap gagal -> kembalikan pesan singkat server sebelum fallback lokal.
+     */
+    internal suspend fun executeGroqWithFallbackAndDiscovery(
+        models: List<String> = GROQ_MODEL_LIST,
+        maxRetries: Int = GeminiCoachService.MAX_RETRY_ATTEMPTS,
+        retryDelayMs: Long = GeminiCoachService.RETRY_DELAY_MS,
+        delayFn: suspend (Long) -> Unit = { delay(it) },
+        discoverChatModelFn: suspend (triedModels: Set<String>) -> String?,
+        invoker: suspend (model: String) -> GroqAttemptResult
+    ): GeminiCoachService.GeminiHttpResult {
+        val triedModels = linkedSetOf<String>()
+        var saw404 = false
+        var sawServiceUnavailable = false
+        var lastErrorMessage = GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE
+
+        suspend fun runSingleModel(model: String): GeminiCoachService.GeminiHttpResult? {
+            triedModels.add(model)
+            for (attempt in 0..maxRetries) {
+                when (val res = invoker(model)) {
+                    is GroqAttemptResult.Success -> {
+                        return GeminiCoachService.GeminiHttpResult.Success(
+                            text = res.text,
+                            modelUsed = model
+                        )
+                    }
+                    is GroqAttemptResult.RetryableFailure -> {
+                        if (res.statusCode == HttpURLConnection.HTTP_UNAVAILABLE) {
+                            sawServiceUnavailable = true
+                        }
+                        lastErrorMessage = res.userMessage
+                        if (attempt < maxRetries) {
+                            delayFn(retryDelayMs)
+                        }
+                    }
+                    is GroqAttemptResult.ModelNotFoundFailure -> {
+                        saw404 = true
+                        lastErrorMessage = res.userMessage
+                        // Move immediately to next fallback model without retrying the missing model
+                        return null
+                    }
+                    is GroqAttemptResult.NonRetryableFailure -> {
+                        return GeminiCoachService.GeminiHttpResult.Failure(
+                            userMessage = res.userMessage,
+                            isOverloaded = false
+                        )
+                    }
+                }
+            }
+            return null
+        }
+
+        for (model in models) {
+            val outcome = runSingleModel(model)
+            if (outcome != null) return outcome
+        }
+
+        // If server returned HTTP 404 for default models, discover an active chat model and retry
+        if (saw404) {
+            val discoveredModel = discoverChatModelFn(triedModels)
+            if (!discoveredModel.isNullOrBlank() && discoveredModel !in triedModels) {
+                val discoveredOutcome = runSingleModel(discoveredModel)
+                if (discoveredOutcome != null) return discoveredOutcome
+            }
+        }
+
+        val finalMessage = if (sawServiceUnavailable && !saw404) {
+            GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE
+        } else {
+            lastErrorMessage
+        }
+        return GeminiCoachService.GeminiHttpResult.Failure(
+            userMessage = finalMessage,
+            isOverloaded = sawServiceUnavailable && !saw404
+        )
+    }
+
     private suspend fun generateGroqDailySuggestions(
         apiKey: String,
         sessions: List<WorkoutSession>,
@@ -205,7 +388,7 @@ object AiCoachService {
         val insights = CoachingEngine.analyzeInsights(sessions, nowMillis)
 
         when (
-            val apiCall = callGroqWithRetry(
+            val apiCall = callGroqWithFallback(
                 apiKey = apiKey,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
@@ -251,7 +434,7 @@ object AiCoachService {
         )
 
         when (
-            val apiCall = callGroqWithRetry(
+            val apiCall = callGroqWithFallback(
                 apiKey = apiKey,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
@@ -272,22 +455,54 @@ object AiCoachService {
         }
     }
 
-    private suspend fun callGroqWithRetry(
+    private suspend fun callGroqWithFallback(
         apiKey: String,
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean
     ): GeminiCoachService.GeminiHttpResult {
-        return GeminiCoachService.executeWithRetryAndFallback(
-            models = listOf(GROQ_MODEL_NAME)
-        ) { model ->
-            callGroqSingleAttempt(
-                model = model,
-                apiKey = apiKey,
-                systemPrompt = systemPrompt,
-                userPrompt = userPrompt,
-                jsonMode = jsonMode
-            )
+        val cleanKey = apiKey.trim()
+        return executeGroqWithFallbackAndDiscovery(
+            models = GROQ_MODEL_LIST,
+            discoverChatModelFn = { triedModels ->
+                fetchActiveGroqChatModel(apiKey = cleanKey, excludeModels = triedModels)
+            },
+            invoker = { model ->
+                callGroqSingleAttempt(
+                    model = model,
+                    apiKey = cleanKey,
+                    systemPrompt = systemPrompt,
+                    userPrompt = userPrompt,
+                    jsonMode = jsonMode
+                )
+            }
+        )
+    }
+
+    private fun fetchActiveGroqChatModel(
+        apiKey: String,
+        excludeModels: Set<String>
+    ): String? {
+        var connection: HttpURLConnection? = null
+        return try {
+            val url = URL(GROQ_MODELS_ENDPOINT)
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = READ_TIMEOUT_MS
+                setRequestProperty("Authorization", "Bearer ${apiKey.trim()}")
+                setRequestProperty("Content-Type", "application/json")
+            }
+            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                val body = GeminiCoachService.readBoundedStream(connection.inputStream)
+                selectFirstActiveGroqChatModel(body, excludeModels)
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection?.disconnect()
         }
     }
 
@@ -297,7 +512,7 @@ object AiCoachService {
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean
-    ): GeminiCoachService.SingleAttemptResult {
+    ): GroqAttemptResult {
         var connection: HttpURLConnection? = null
         return try {
             val url = URL(GROQ_ENDPOINT)
@@ -306,8 +521,8 @@ object AiCoachService {
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
                 doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                setRequestProperty("Authorization", "Bearer $apiKey")
+                setRequestProperty("Authorization", "Bearer ${apiKey.trim()}")
+                setRequestProperty("Content-Type", "application/json")
             }
 
             val requestBody = buildGroqRequestJson(
@@ -321,45 +536,61 @@ object AiCoachService {
                 writer.flush()
             }
 
-            when (val statusCode = connection.responseCode) {
-                HttpURLConnection.HTTP_OK -> {
-                    val rawBody = GeminiCoachService.readBoundedStream(connection.inputStream)
-                    val extracted = extractGroqContent(rawBody)
-                    if (extracted.isNullOrBlank()) {
-                        GeminiCoachService.SingleAttemptResult.NonRetryableFailure(
-                            "Respons Groq AI kosong. Coba beberapa saat lagi."
-                        )
-                    } else {
-                        GeminiCoachService.SingleAttemptResult.Success(extracted)
-                    }
+            val statusCode = connection.responseCode
+            if (statusCode == HttpURLConnection.HTTP_OK) {
+                val rawBody = GeminiCoachService.readBoundedStream(connection.inputStream)
+                val extracted = extractGroqContent(rawBody)
+                return if (extracted.isNullOrBlank()) {
+                    GroqAttemptResult.NonRetryableFailure(
+                        "Respons Groq AI kosong. Menampilkan saran lokal."
+                    )
+                } else {
+                    GroqAttemptResult.Success(extracted)
+                }
+            }
+
+            val rawError = try {
+                connection.errorStream?.let { GeminiCoachService.readBoundedStream(it) }
+            } catch (_: Exception) {
+                null
+            }
+            val serverMessage = extractServerErrorMessage(rawError)
+
+            when (statusCode) {
+                HttpURLConnection.HTTP_NOT_FOUND -> {
+                    val detail = serverMessage?.let { "Groq AI (404): $it" }
+                        ?: "Model Groq AI tidak ditemukan (404)."
+                    GroqAttemptResult.ModelNotFoundFailure(detail)
                 }
                 HttpURLConnection.HTTP_UNAVAILABLE -> {
-                    GeminiCoachService.SingleAttemptResult.RetryableFailure(
+                    GroqAttemptResult.RetryableFailure(
                         statusCode = HttpURLConnection.HTTP_UNAVAILABLE,
-                        userMessage = GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE
+                        userMessage = serverMessage?.let { "Groq AI (503): $it" }
+                            ?: GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE
                     )
                 }
                 429 -> {
-                    GeminiCoachService.SingleAttemptResult.RetryableFailure(
+                    GroqAttemptResult.RetryableFailure(
                         statusCode = 429,
-                        userMessage = "Kuota Groq AI sementara penuh. Coba tekan Refresh sebentar lagi ya."
+                        userMessage = serverMessage?.let { "Kuota Groq AI penuh (429): $it" }
+                            ?: "Kuota Groq AI sementara penuh. Coba tekan Refresh sebentar lagi ya."
                     )
                 }
                 HttpURLConnection.HTTP_BAD_REQUEST,
                 HttpURLConnection.HTTP_UNAUTHORIZED,
                 HttpURLConnection.HTTP_FORBIDDEN -> {
-                    GeminiCoachService.SingleAttemptResult.NonRetryableFailure(
-                        "API Key Groq tidak valid atau belum aktif. Periksa kembali di Pengaturan."
-                    )
+                    val detail = serverMessage?.let { "Groq AI ($statusCode): $it" }
+                        ?: "API Key Groq tidak valid atau belum aktif (kode $statusCode). Periksa di Pengaturan."
+                    GroqAttemptResult.NonRetryableFailure(detail)
                 }
                 else -> {
-                    GeminiCoachService.SingleAttemptResult.NonRetryableFailure(
-                        "Layanan Groq AI sedang tidak merespons (kode $statusCode). Coba lagi nanti."
-                    )
+                    val detail = serverMessage?.let { "Groq AI ($statusCode): $it" }
+                        ?: "Layanan Groq AI sedang tidak merespons (kode $statusCode)."
+                    GroqAttemptResult.NonRetryableFailure(detail)
                 }
             }
         } catch (_: Exception) {
-            GeminiCoachService.SingleAttemptResult.NonRetryableFailure(
+            GroqAttemptResult.NonRetryableFailure(
                 "Tidak dapat terhubung ke Groq AI. Periksa koneksi internetmu."
             )
         } finally {
@@ -367,7 +598,7 @@ object AiCoachService {
         }
     }
 
-    private fun buildGroqRequestJson(
+    internal fun buildGroqRequestJson(
         model: String,
         systemPrompt: String,
         userPrompt: String,

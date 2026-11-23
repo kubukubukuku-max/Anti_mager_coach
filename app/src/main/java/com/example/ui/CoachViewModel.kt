@@ -5,9 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.AiCoachService
 import com.example.AiProvider
+import com.example.BuildConfig
 import com.example.DailySuggestionsResult
 import com.example.ReminderScheduler
 import com.example.WeeklyReviewResult
+import com.example.data.AppBackupCodec
+import com.example.data.AppBackupSnapshot
 import com.example.data.FirebaseRepository
 import com.example.data.GeminiApiKeyStore
 import com.example.data.ReminderSettings
@@ -353,16 +356,26 @@ class CoachViewModel(
 
     fun saveAiApiKey(provider: AiProvider, rawKey: String) {
         val cleaned = rawKey.trim()
-        geminiApiKeyStore.saveSelectedProvider(provider)
-        geminiApiKeyStore.saveApiKey(provider, cleaned)
-        selectedAiProvider.value = provider
+        val effectiveProvider = if (cleaned.isNotEmpty()) {
+            AiCoachService.resolveEffectiveProvider(provider, cleaned)
+        } else {
+            provider
+        }
+        geminiApiKeyStore.saveSelectedProvider(effectiveProvider)
+        geminiApiKeyStore.saveApiKey(effectiveProvider, cleaned)
+        selectedAiProvider.value = effectiveProvider
         activeAiApiKey.value = cleaned
         aiRecommendationsCache.value = emptyMap()
         if (cleaned.isNotEmpty()) {
-            snackbarMessage.value = "API Key ${provider.displayName} tersimpan — AI Aktif ✨"
+            val autoRoutedNote = if (effectiveProvider != provider) {
+                " (otomatis terdeteksi sebagai Groq)"
+            } else {
+                ""
+            }
+            snackbarMessage.value = "API Key ${effectiveProvider.displayName} tersimpan$autoRoutedNote — AI Aktif ✨"
             refreshAiSuggestions(targetStatus = selectedStatus.value, explicitTrigger = false)
         } else {
-            snackbarMessage.value = "API Key ${provider.displayName} dihapus — kembali ke Mode Offline (Aturan Lokal)."
+            snackbarMessage.value = "API Key ${effectiveProvider.displayName} dihapus — kembali ke Mode Offline (Aturan Lokal)."
         }
     }
 
@@ -370,8 +383,8 @@ class CoachViewModel(
         targetStatus: TodayStatus = selectedStatus.value,
         explicitTrigger: Boolean = true
     ) {
-        val provider = selectedAiProvider.value
         val key = activeAiApiKey.value.trim()
+        val provider = AiCoachService.resolveEffectiveProvider(selectedAiProvider.value, key)
         if (key.isEmpty()) {
             if (explicitTrigger) {
                 snackbarMessage.value = "Isi API Key ${provider.displayName} di Pengaturan terlebih dahulu."
@@ -394,8 +407,8 @@ class CoachViewModel(
                             aiRecommendationsCache.value + (targetStatus to result.recommendation)
                     }
                     is DailySuggestionsResult.FallbackToLocal -> {
-                        // Local CoachingEngine suggestions remain visible in UI so screen is never empty
-                        if (explicitTrigger || result.isOverloaded) {
+                        // Tampilkan pesan error singkat dari server di UI sebelum/saat fallback ke CoachingEngine lokal
+                        if (result.friendlyMessage.isNotBlank()) {
                             snackbarMessage.value = result.friendlyMessage
                         }
                     }
@@ -949,8 +962,113 @@ class CoachViewModel(
 
     fun exportSessionsJson(onExportReady: (String) -> Unit) {
         viewModelScope.launch {
-            val json = localRepository.serializeSessionsJson(uiState.value.allSessions)
+            val json = buildFullBackupJson()
             onExportReady(json)
+        }
+    }
+
+    /**
+     * Menghasilkan JSON backup lengkap (riwayat latihan, ringkasan profil/streak, dan preferensi)
+     * tanpa menyertakan API Key AI demi keamanan.
+     */
+    fun buildFullBackupJson(): String {
+        val state = uiState.value
+        val snapshot = AppBackupCodec.createSnapshot(
+            sessions = state.allSessions,
+            themeMode = state.themeMode,
+            reminderSettings = state.reminderSettings,
+            selectedAiProvider = state.aiProvider,
+            todayStatus = state.todayStatus,
+            displayName = userDisplayName,
+            appVersion = BuildConfig.VERSION_NAME
+        )
+        return AppBackupCodec.encodeToJson(snapshot)
+    }
+
+    fun parseBackupJson(rawJson: String): Result<AppBackupSnapshot> {
+        return AppBackupCodec.decodeFromJson(rawJson)
+    }
+
+    /**
+     * Menimpa data lama dengan isi [snapshot] backup yang sudah divalidasi, memulihkan
+     * preferensi (tema, pengingat harian, pilihan penyedia AI tanpa menyentuh API Key),
+     * dan langsung menyegarkan UI.
+     */
+    fun restoreFromBackup(
+        snapshot: AppBackupSnapshot,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val repo = firebaseRepository
+                val uid = currentUserId
+                if (repo != null && !uid.isNullOrBlank()) {
+                    val clearResult = repo.clearAllWorkoutSessions(uid)
+                    if (clearResult.isFailure) {
+                        val msg = clearResult.exceptionOrNull()?.localizedMessage
+                            ?: "Gagal mengganti riwayat latihan di cloud."
+                        snackbarMessage.value = msg
+                        onComplete(false, msg)
+                        return@launch
+                    }
+                    if (snapshot.workoutSessions.isNotEmpty()) {
+                        val uploadResult = repo.upsertSyncedSessions(
+                            userId = uid,
+                            incomingSessions = snapshot.workoutSessions,
+                            existingSessions = emptyList()
+                        )
+                        if (uploadResult.isFailure) {
+                            val msg = uploadResult.exceptionOrNull()?.localizedMessage
+                                ?: "Gagal mengunggah data pemulihan ke cloud."
+                            snackbarMessage.value = msg
+                            onComplete(false, msg)
+                            return@launch
+                        }
+                    }
+                    localRepository.clearAllSessions()
+                } else {
+                    localRepository.replaceAllSessions(snapshot.workoutSessions)
+                }
+
+                if (snapshot.hasPreferencesSection) {
+                    val prefs = snapshot.preferences
+                    localRepository.setThemeMode(prefs.themeMode)
+                    if (repo != null && !uid.isNullOrBlank()) {
+                        repo.updateThemeMode(
+                            userId = uid,
+                            mode = prefs.themeMode,
+                            displayName = userDisplayName,
+                            email = userEmail
+                        )
+                    }
+
+                    localRepository.saveReminderSettings(prefs.reminderSettings)
+                    if (prefs.reminderSettings.enabled) {
+                        reminderScheduler.scheduleDailyReminder(
+                            prefs.reminderSettings.hour,
+                            prefs.reminderSettings.minute
+                        )
+                    } else {
+                        reminderScheduler.cancelDailyReminder()
+                    }
+
+                    // Pulihkan pilihan penyedia AI tanpa mengubah atau menghapus API Key tersimpan
+                    geminiApiKeyStore.saveSelectedProvider(prefs.selectedAiProvider)
+                    selectedAiProvider.value = prefs.selectedAiProvider
+                    activeAiApiKey.value = geminiApiKeyStore.getApiKey(prefs.selectedAiProvider)
+                    selectedStatus.value = prefs.todayStatus
+                }
+
+                // Segarkan rekomendasi & ritme mingguan dari data yang baru dipulihkan
+                aiRecommendationsCache.value = emptyMap()
+                val msg = "Data berhasil dipulihkan (${snapshot.workoutSessions.size} sesi latihan)!"
+                snackbarMessage.value = msg
+                onComplete(true, msg)
+            } catch (e: Exception) {
+                val msg = "Gagal memulihkan backup: ${e.message?.take(80) ?: "kesalahan tidak diketahui"}."
+                snackbarMessage.value = msg
+                onComplete(false, msg)
+            }
         }
     }
 

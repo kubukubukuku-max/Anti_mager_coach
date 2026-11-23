@@ -145,6 +145,15 @@ object GeminiCoachService {
                 friendlyMessage = "Isi Gemini API Key di Pengaturan terlebih dahulu."
             )
         }
+        if (cleanKey.startsWith("gsk_")) {
+            return@withContext AiCoachService.generateDailySuggestionsDetailed(
+                provider = AiProvider.GROQ,
+                apiKey = cleanKey,
+                sessions = sessions,
+                energyState = energyState,
+                nowMillis = nowMillis
+            )
+        }
 
         val history14Days = summarizeSessions(sessions, daysWindow = 14, nowMillis = nowMillis)
         val insights = CoachingEngine.analyzeInsights(sessions, nowMillis)
@@ -214,6 +223,14 @@ object GeminiCoachService {
         if (cleanKey.isEmpty()) {
             return@withContext WeeklyReviewResult.Error(
                 "Gemini API Key belum diisi. Silakan masukkan API Key di Pengaturan terlebih dahulu."
+            )
+        }
+        if (cleanKey.startsWith("gsk_")) {
+            return@withContext AiCoachService.generateWeeklyReview(
+                provider = AiProvider.GROQ,
+                apiKey = cleanKey,
+                sessions = sessions,
+                nowMillis = nowMillis
             )
         }
 
@@ -530,18 +547,27 @@ object GeminiCoachService {
                 writer.flush()
             }
 
-            when (val statusCode = connection.responseCode) {
-                HttpURLConnection.HTTP_OK -> {
-                    val rawBody = readBoundedStream(connection.inputStream)
-                    val extracted = extractCandidateText(rawBody)
-                    if (extracted.isNullOrBlank()) {
-                        SingleAttemptResult.NonRetryableFailure(
-                            "Respons Gemini kosong. Coba beberapa saat lagi."
-                        )
-                    } else {
-                        SingleAttemptResult.Success(extracted)
-                    }
+            val statusCode = connection.responseCode
+            if (statusCode == HttpURLConnection.HTTP_OK) {
+                val rawBody = readBoundedStream(connection.inputStream)
+                val extracted = extractCandidateText(rawBody)
+                return if (extracted.isNullOrBlank()) {
+                    SingleAttemptResult.NonRetryableFailure(
+                        "Respons Gemini kosong. Coba beberapa saat lagi."
+                    )
+                } else {
+                    SingleAttemptResult.Success(extracted)
                 }
+            }
+
+            val rawError = try {
+                connection.errorStream?.let { readBoundedStream(it) }
+            } catch (_: Exception) {
+                null
+            }
+            val serverMessage = AiCoachService.extractServerErrorMessage(rawError)
+
+            when (statusCode) {
                 HttpURLConnection.HTTP_UNAVAILABLE -> {
                     SingleAttemptResult.RetryableFailure(
                         statusCode = HttpURLConnection.HTTP_UNAVAILABLE,
@@ -551,19 +577,22 @@ object GeminiCoachService {
                 429 -> {
                     SingleAttemptResult.RetryableFailure(
                         statusCode = 429,
-                        userMessage = "Kuota Gemini sementara penuh. Coba tekan Refresh sebentar lagi ya."
+                        userMessage = serverMessage?.let { "Kuota Gemini penuh (429): $it" }
+                            ?: "Kuota Gemini sementara penuh. Coba tekan Refresh sebentar lagi ya."
                     )
                 }
                 HttpURLConnection.HTTP_BAD_REQUEST,
                 HttpURLConnection.HTTP_UNAUTHORIZED,
                 HttpURLConnection.HTTP_FORBIDDEN -> {
                     SingleAttemptResult.NonRetryableFailure(
-                        "API Key Gemini tidak valid atau belum aktif. Periksa kembali di Pengaturan."
+                        serverMessage?.let { "Gemini AI ($statusCode): $it" }
+                            ?: "API Key Gemini tidak valid atau belum aktif. Periksa kembali di Pengaturan."
                     )
                 }
                 else -> {
                     SingleAttemptResult.NonRetryableFailure(
-                        "Layanan Gemini sedang tidak merespons (kode $statusCode). Coba lagi nanti."
+                        serverMessage?.let { "Gemini AI ($statusCode): $it" }
+                            ?: "Layanan Gemini sedang tidak merespons (kode $statusCode). Coba lagi nanti."
                     )
                 }
             }
