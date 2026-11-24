@@ -39,9 +39,10 @@ enum class AiProvider(
 /**
  * Layanan Multi-Provider AI untuk Anti-Mager Coach:
  * - Groq (Default): POST langsung ke https://api.groq.com/openai/v1/chat/completions
- *   dengan model dipaksa secara ketat ke "llama-3.3-70b-versatile" (tanpa pemanggilan /models).
- * - Auto-routing: API Key yang diawali "gsk_" otomatis dipaksa ke endpoint Groq.
- * - Gemini (Cadangan): delegasi ke [GeminiCoachService] dengan auto-retry & fallback model Flash.
+ *   dengan model utama "llama-3.3-70b-versatile" dan cadangan "llama-3.1-8b-instant".
+ *   TIDAK pernah memanggil /models dan TIDAK pernah membaca nama model dari SharedPreferences.
+ * - Auto-routing: API Key yang diawali "gsk_" wajib diarahkan ke endpoint Groq.
+ * - Gemini (Cadangan): delegasi ke [GeminiCoachService] dengan model Gemini Flash terpisah.
  */
 object AiCoachService {
 
@@ -49,10 +50,12 @@ object AiCoachService {
     const val GROQ_MODEL_NAME = "llama-3.3-70b-versatile"
     const val GROQ_FALLBACK_MODEL_NAME = "llama-3.1-8b-instant"
 
-    val ALLOWED_GROQ_MODELS: Set<String> = setOf(
+    val GROQ_MODEL_LIST: List<String> = listOf(
         GROQ_MODEL_NAME,
         GROQ_FALLBACK_MODEL_NAME
     )
+
+    val ALLOWED_GROQ_MODELS: Set<String> = GROQ_MODEL_LIST.toSet()
 
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 35_000
@@ -62,10 +65,9 @@ object AiCoachService {
     )
 
     /**
-     * Pengaman model Groq:
-     * Jika nilai model dari Pengaturan/penyimpanan lokal kosong, mengandung kata "orpheus",
-     * atau bukan "llama-3.3-70b-versatile" / "llama-3.1-8b-instant", langsung abaikan
-     * dan ganti paksa ke "llama-3.3-70b-versatile".
+     * Pengaman ketat model Groq: hanya mengizinkan "llama-3.3-70b-versatile" atau
+     * "llama-3.1-8b-instant". Nilai lain (kosong, orpheus, nama model Gemini, dll.)
+     * langsung diganti paksa ke "llama-3.3-70b-versatile".
      */
     fun sanitizeGroqModel(rawModel: String?): String {
         val candidate = rawModel?.trim().orEmpty()
@@ -76,7 +78,7 @@ object AiCoachService {
 
     /**
      * Memastikan API Key yang diawali `gsk_` selalu diarahkan ke endpoint Groq,
-     * meskipun pengguna sebelumnya memilih tab Gemini.
+     * mengabaikan pilihan provider Gemini yang mungkin masih tersisa di penyimpanan lokal.
      */
     fun resolveEffectiveProvider(requestedProvider: AiProvider, apiKey: String): AiProvider {
         val cleanKey = apiKey.trim()
@@ -95,6 +97,26 @@ object AiCoachService {
         } else {
             "$cleaned $tag"
         }
+    }
+
+    /**
+     * Format pesan diagnostik singkat untuk respons HTTP non-200 agar selalu memuat:
+     * kode HTTP, domain/path tujuan (tanpa query/key), nama model yang dikirim, dan error.message server.
+     */
+    internal fun formatHttpDiagnostic(
+        statusCode: Int,
+        endpointUrl: String,
+        sentModel: String,
+        serverErrorMessage: String?
+    ): String {
+        val target = endpointUrl
+            .trim()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .substringBefore('?')
+        val detail = serverErrorMessage?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "Tidak ada pesan detail dari server"
+        return "HTTP $statusCode | $target | [Model terkirim: $sentModel] | $detail"
     }
 
     suspend fun generateDailySuggestions(
@@ -241,13 +263,14 @@ object AiCoachService {
     }
 
     /**
-     * Mengekstrak `error.message` (atau `message`) secara ringkas dari respons error JSON server
-     * agar bisa ditampilkan singkat di UI sebelum fallback ke CoachingEngine lokal.
+     * Mengekstrak `error.message` (atau `message`) secara ringkas dari respons error JSON server.
+     * Jika respons bukan JSON valid, tetap mengambil potongan teks singkat agar diagnostik jelas.
      */
     internal fun extractServerErrorMessage(rawErrorBody: String?): String? {
         if (rawErrorBody.isNullOrBlank()) return null
+        val trimmed = rawErrorBody.trim()
         return try {
-            val root = moshiMapAdapter.fromJson(rawErrorBody.trim()) ?: return null
+            val root = moshiMapAdapter.fromJson(trimmed) ?: return fallbackPlainErrorSnippet(trimmed)
             val errorObj = root["error"] as? Map<*, *>
             val nestedMessage = (errorObj?.get("message") as? String)?.trim()
             val topMessage = (root["message"] as? String)?.trim()
@@ -256,71 +279,87 @@ object AiCoachService {
                 !topMessage.isNullOrEmpty() -> topMessage
                 else -> null
             }
-            chosen?.replace(Regex("\\s+"), " ")?.take(140)
+            chosen?.replace(Regex("\\s+"), " ")?.take(160)
         } catch (_: Exception) {
-            null
+            fallbackPlainErrorSnippet(trimmed)
         }
+    }
+
+    private fun fallbackPlainErrorSnippet(raw: String): String? {
+        val stripped = raw
+            .replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return stripped.takeIf { it.isNotEmpty() }?.take(120)
     }
 
     internal sealed class GroqAttemptResult {
         data class Success(val text: String) : GroqAttemptResult()
         data class RetryableFailure(val statusCode: Int, val userMessage: String) : GroqAttemptResult()
+        data class ModelNotFoundFailure(val userMessage: String) : GroqAttemptResult()
         data class NonRetryableFailure(val userMessage: String) : GroqAttemptResult()
     }
 
     /**
-     * Orkestrasi panggilan Groq AI dengan auto-retry untuk HTTP 503/429.
-     * Model selalu dipaksa ke "llama-3.3-70b-versatile" (tidak pernah memanggil endpoint /models).
+     * Orkestrasi panggilan Groq AI hanya pada daftar model tetap:
+     * 1. "llama-3.3-70b-versatile" (utama)
+     * 2. "llama-3.1-8b-instant" (cadangan saat 404 / 503 / 429)
+     * Tidak pernah memanggil /models dan tidak pernah membaca model dari SharedPreferences.
      */
-    internal suspend fun executeGroqWithRetry(
-        requestedModel: String? = GROQ_MODEL_NAME,
+    internal suspend fun executeGroqWithFallback(
+        models: List<String> = GROQ_MODEL_LIST,
         maxRetries: Int = GeminiCoachService.MAX_RETRY_ATTEMPTS,
         retryDelayMs: Long = GeminiCoachService.RETRY_DELAY_MS,
         delayFn: suspend (Long) -> Unit = { delay(it) },
         invoker: suspend (model: String) -> GroqAttemptResult
     ): GeminiCoachService.GeminiHttpResult {
-        // Sanitasi + paksa model utama llama-3.3-70b-versatile
-        sanitizeGroqModel(requestedModel)
-        val enforcedModel = GROQ_MODEL_NAME
+        val safeModels = models
+            .map { sanitizeGroqModel(it) }
+            .distinct()
+            .ifEmpty { GROQ_MODEL_LIST }
+
         var sawServiceUnavailable = false
         var lastErrorMessage = appendSentModelTag(
             GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE,
-            enforcedModel
+            safeModels.first()
         )
 
-        for (attempt in 0..maxRetries) {
-            when (val res = invoker(enforcedModel)) {
-                is GroqAttemptResult.Success -> {
-                    return GeminiCoachService.GeminiHttpResult.Success(
-                        text = res.text,
-                        modelUsed = enforcedModel
-                    )
-                }
-                is GroqAttemptResult.RetryableFailure -> {
-                    if (res.statusCode == HttpURLConnection.HTTP_UNAVAILABLE) {
-                        sawServiceUnavailable = true
+        for (model in safeModels) {
+            var moveToNextModel = false
+            for (attempt in 0..maxRetries) {
+                when (val res = invoker(model)) {
+                    is GroqAttemptResult.Success -> {
+                        return GeminiCoachService.GeminiHttpResult.Success(
+                            text = res.text,
+                            modelUsed = model
+                        )
                     }
-                    lastErrorMessage = appendSentModelTag(res.userMessage, enforcedModel)
-                    if (attempt < maxRetries) {
-                        delayFn(retryDelayMs)
+                    is GroqAttemptResult.RetryableFailure -> {
+                        if (res.statusCode == HttpURLConnection.HTTP_UNAVAILABLE) {
+                            sawServiceUnavailable = true
+                        }
+                        lastErrorMessage = appendSentModelTag(res.userMessage, model)
+                        if (attempt < maxRetries) {
+                            delayFn(retryDelayMs)
+                        }
+                    }
+                    is GroqAttemptResult.ModelNotFoundFailure -> {
+                        lastErrorMessage = appendSentModelTag(res.userMessage, model)
+                        moveToNextModel = true
+                    }
+                    is GroqAttemptResult.NonRetryableFailure -> {
+                        return GeminiCoachService.GeminiHttpResult.Failure(
+                            userMessage = appendSentModelTag(res.userMessage, model),
+                            isOverloaded = false
+                        )
                     }
                 }
-                is GroqAttemptResult.NonRetryableFailure -> {
-                    return GeminiCoachService.GeminiHttpResult.Failure(
-                        userMessage = appendSentModelTag(res.userMessage, enforcedModel),
-                        isOverloaded = false
-                    )
-                }
+                if (moveToNextModel) break
             }
         }
 
-        val finalMessage = if (sawServiceUnavailable) {
-            appendSentModelTag(GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE, enforcedModel)
-        } else {
-            lastErrorMessage
-        }
         return GeminiCoachService.GeminiHttpResult.Failure(
-            userMessage = finalMessage,
+            userMessage = lastErrorMessage,
             isOverloaded = sawServiceUnavailable
         )
     }
@@ -341,7 +380,7 @@ object AiCoachService {
         val insights = CoachingEngine.analyzeInsights(sessions, nowMillis)
 
         when (
-            val apiCall = callGroqWithRetry(
+            val apiCall = callGroqWithFallback(
                 apiKey = apiKey,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
@@ -390,7 +429,7 @@ object AiCoachService {
         )
 
         when (
-            val apiCall = callGroqWithRetry(
+            val apiCall = callGroqWithFallback(
                 apiKey = apiKey,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
@@ -416,17 +455,18 @@ object AiCoachService {
         }
     }
 
-    private suspend fun callGroqWithRetry(
+    private suspend fun callGroqWithFallback(
         apiKey: String,
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean
     ): GeminiCoachService.GeminiHttpResult {
         val cleanKey = apiKey.trim()
-        return executeGroqWithRetry(
-            requestedModel = GROQ_MODEL_NAME,
-            invoker = {
+        return executeGroqWithFallback(
+            models = GROQ_MODEL_LIST,
+            invoker = { model ->
                 callGroqSingleAttempt(
+                    model = model,
                     apiKey = cleanKey,
                     systemPrompt = systemPrompt,
                     userPrompt = userPrompt,
@@ -437,13 +477,14 @@ object AiCoachService {
     }
 
     private fun callGroqSingleAttempt(
+        model: String,
         apiKey: String,
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean
     ): GroqAttemptResult {
-        // Paksa (hardcode) properti model tepat sebelum request dikirim ke Groq
-        val enforcedModel = "llama-3.3-70b-versatile"
+        // Kunci ketat ke "llama-3.3-70b-versatile" atau cadangan "llama-3.1-8b-instant" saja
+        val enforcedModel = sanitizeGroqModel(model)
         var connection: HttpURLConnection? = null
         return try {
             val url = URL(GROQ_ENDPOINT)
@@ -457,6 +498,7 @@ object AiCoachService {
             }
 
             val requestBody = buildGroqRequestJson(
+                model = enforcedModel,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
                 jsonMode = jsonMode
@@ -488,41 +530,38 @@ object AiCoachService {
                 null
             }
             val serverMessage = extractServerErrorMessage(rawError)
+            val diagnostic = formatHttpDiagnostic(
+                statusCode = statusCode,
+                endpointUrl = GROQ_ENDPOINT,
+                sentModel = enforcedModel,
+                serverErrorMessage = serverMessage
+            )
 
             when (statusCode) {
+                HttpURLConnection.HTTP_NOT_FOUND -> {
+                    GroqAttemptResult.ModelNotFoundFailure(diagnostic)
+                }
                 HttpURLConnection.HTTP_UNAVAILABLE -> {
-                    val base = serverMessage?.let { "Groq AI (503): $it" }
-                        ?: GeminiCoachService.OVERLOADED_FRIENDLY_MESSAGE
                     GroqAttemptResult.RetryableFailure(
                         statusCode = HttpURLConnection.HTTP_UNAVAILABLE,
-                        userMessage = appendSentModelTag(base, enforcedModel)
+                        userMessage = diagnostic
                     )
                 }
                 429 -> {
-                    val base = serverMessage?.let { "Kuota Groq AI penuh (429): $it" }
-                        ?: "Kuota Groq AI sementara penuh. Coba tekan Refresh sebentar lagi ya."
                     GroqAttemptResult.RetryableFailure(
                         statusCode = 429,
-                        userMessage = appendSentModelTag(base, enforcedModel)
+                        userMessage = diagnostic
                     )
                 }
-                HttpURLConnection.HTTP_BAD_REQUEST,
-                HttpURLConnection.HTTP_UNAUTHORIZED,
-                HttpURLConnection.HTTP_FORBIDDEN -> {
-                    val base = serverMessage?.let { "Groq AI ($statusCode): $it" }
-                        ?: "API Key Groq tidak valid atau belum aktif (kode $statusCode). Periksa di Pengaturan."
-                    GroqAttemptResult.NonRetryableFailure(appendSentModelTag(base, enforcedModel))
-                }
                 else -> {
-                    val base = serverMessage?.let { "Groq AI ($statusCode): $it" }
-                        ?: "Layanan Groq AI sedang tidak merespons (kode $statusCode)."
-                    GroqAttemptResult.NonRetryableFailure(appendSentModelTag(base, enforcedModel))
+                    GroqAttemptResult.NonRetryableFailure(diagnostic)
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            val detail = e.message?.trim()?.take(100) ?: "Periksa koneksi internetmu."
             GroqAttemptResult.NonRetryableFailure(
                 appendSentModelTag(
-                    "Tidak dapat terhubung ke Groq AI. Periksa koneksi internetmu.",
+                    "Gagal terhubung ke api.groq.com/openai/v1/chat/completions: $detail",
                     enforcedModel
                 )
             )
@@ -532,13 +571,14 @@ object AiCoachService {
     }
 
     internal fun buildGroqRequestJson(
+        model: String = GROQ_MODEL_NAME,
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean
     ): String {
-        // Hardcode properti model di body JSON secara langsung tepat sebelum request dikirim
+        val safeModel = sanitizeGroqModel(model)
         val payload = linkedMapOf<String, Any?>(
-            "model" to "llama-3.3-70b-versatile",
+            "model" to safeModel,
             "messages" to listOf(
                 mapOf("role" to "system", "content" to systemPrompt),
                 mapOf("role" to "user", "content" to userPrompt)

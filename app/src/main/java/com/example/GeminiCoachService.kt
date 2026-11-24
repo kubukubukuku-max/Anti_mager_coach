@@ -582,43 +582,35 @@ object GeminiCoachService {
                 null
             }
             val serverMessage = AiCoachService.extractServerErrorMessage(rawError)
+            val diagnostic = AiCoachService.formatHttpDiagnostic(
+                statusCode = statusCode,
+                endpointUrl = endpoint,
+                sentModel = safeModel,
+                serverErrorMessage = serverMessage
+            )
 
             when (statusCode) {
                 HttpURLConnection.HTTP_UNAVAILABLE -> {
                     SingleAttemptResult.RetryableFailure(
                         statusCode = HttpURLConnection.HTTP_UNAVAILABLE,
-                        userMessage = OVERLOADED_FRIENDLY_MESSAGE
+                        userMessage = diagnostic
                     )
                 }
                 429 -> {
-                    val base = serverMessage?.let { "Kuota Gemini penuh (429): $it" }
-                        ?: "Kuota Gemini sementara penuh. Coba tekan Refresh sebentar lagi ya."
                     SingleAttemptResult.RetryableFailure(
                         statusCode = 429,
-                        userMessage = AiCoachService.appendSentModelTag(base, safeModel)
-                    )
-                }
-                HttpURLConnection.HTTP_BAD_REQUEST,
-                HttpURLConnection.HTTP_UNAUTHORIZED,
-                HttpURLConnection.HTTP_FORBIDDEN -> {
-                    val base = serverMessage?.let { "Gemini AI ($statusCode): $it" }
-                        ?: "API Key Gemini tidak valid atau belum aktif. Periksa kembali di Pengaturan."
-                    SingleAttemptResult.NonRetryableFailure(
-                        AiCoachService.appendSentModelTag(base, safeModel)
+                        userMessage = diagnostic
                     )
                 }
                 else -> {
-                    val base = serverMessage?.let { "Gemini AI ($statusCode): $it" }
-                        ?: "Layanan Gemini sedang tidak merespons (kode $statusCode). Coba lagi nanti."
-                    SingleAttemptResult.NonRetryableFailure(
-                        AiCoachService.appendSentModelTag(base, safeModel)
-                    )
+                    SingleAttemptResult.NonRetryableFailure(diagnostic)
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            val detail = e.message?.trim()?.take(100) ?: "Periksa koneksi internetmu."
             SingleAttemptResult.NonRetryableFailure(
                 AiCoachService.appendSentModelTag(
-                    "Tidak dapat terhubung ke Gemini AI. Periksa koneksi internetmu.",
+                    "Gagal terhubung ke generativelanguage.googleapis.com: $detail",
                     safeModel
                 )
             )

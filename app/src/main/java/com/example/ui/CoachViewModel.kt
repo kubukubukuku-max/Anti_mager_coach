@@ -420,11 +420,15 @@ class CoachViewModel(
     }
 
     fun requestWeeklyAiReview() {
-        val provider = selectedAiProvider.value
         val key = activeAiApiKey.value.trim()
+        val provider = AiCoachService.resolveEffectiveProvider(selectedAiProvider.value, key)
         if (key.isEmpty()) {
             weeklyReviewState.value = WeeklyReviewUiState.MissingApiKey
             return
+        }
+        if (provider != selectedAiProvider.value) {
+            selectedAiProvider.value = provider
+            geminiApiKeyStore.saveSelectedProvider(provider)
         }
         viewModelScope.launch {
             weeklyReviewState.value = WeeklyReviewUiState.Loading
@@ -1054,8 +1058,9 @@ class CoachViewModel(
 
                     // Pulihkan pilihan penyedia AI tanpa mengubah atau menghapus API Key tersimpan
                     geminiApiKeyStore.saveSelectedProvider(prefs.selectedAiProvider)
-                    selectedAiProvider.value = prefs.selectedAiProvider
-                    activeAiApiKey.value = geminiApiKeyStore.getApiKey(prefs.selectedAiProvider)
+                    val resolvedProvider = geminiApiKeyStore.getSelectedProvider()
+                    selectedAiProvider.value = resolvedProvider
+                    activeAiApiKey.value = geminiApiKeyStore.getApiKey(resolvedProvider)
                     selectedStatus.value = prefs.todayStatus
                 }
 

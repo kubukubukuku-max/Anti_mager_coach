@@ -132,7 +132,11 @@ fun CoachScreen(
         if (message != null) {
             snackbarHostState.showSnackbar(
                 message = message,
-                duration = SnackbarDuration.Short
+                duration = if (message.contains("HTTP ") || message.contains("[Model terkirim:")) {
+                    SnackbarDuration.Long
+                } else {
+                    SnackbarDuration.Short
+                }
             )
             viewModel.clearSnackbar()
         }
