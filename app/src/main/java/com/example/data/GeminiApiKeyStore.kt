@@ -44,6 +44,16 @@ class GeminiApiKeyStore(context: Context) {
         saveApiKey(getSelectedProvider(), rawKey)
     }
 
+    fun getGroqModel(): String {
+        val stored = prefs.getString(KEY_GROQ_MODEL, null)
+        return com.example.AiCoachService.sanitizeGroqModel(stored)
+    }
+
+    fun saveGroqModel(rawModel: String?) {
+        val safeModel = com.example.AiCoachService.sanitizeGroqModel(rawModel)
+        prefs.edit().putString(KEY_GROQ_MODEL, safeModel).apply()
+    }
+
     private fun prefKeyFor(provider: AiProvider): String = when (provider) {
         AiProvider.GROQ -> KEY_GROQ_API_KEY
         AiProvider.GEMINI -> KEY_GEMINI_API_KEY
@@ -54,5 +64,6 @@ class GeminiApiKeyStore(context: Context) {
         private const val KEY_SELECTED_PROVIDER = "selected_ai_provider"
         private const val KEY_GROQ_API_KEY = "groq_api_key"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
+        private const val KEY_GROQ_MODEL = "groq_model_name"
     }
 }

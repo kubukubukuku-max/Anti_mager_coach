@@ -61,6 +61,18 @@ object GeminiCoachService {
     private const val MAX_RESPONSE_CHARS = 512 * 1024
 
     /**
+     * Memastikan request ke Gemini API selalu memakai model Gemini (tidak pernah tertimpa model Groq/Llama).
+     */
+    internal fun sanitizeGeminiModel(rawModel: String?): String {
+        val candidate = rawModel?.trim().orEmpty()
+        return if (candidate.startsWith("gemini-", ignoreCase = true)) {
+            candidate
+        } else {
+            MODEL_NAME
+        }
+    }
+
+    /**
      * Merangkum riwayat latihan dalam rentang [daysWindow] hari terakhir menjadi teks ringkas
      * agar hemat token namun kaya konteks untuk prompt Gemini.
      */
@@ -528,9 +540,10 @@ object GeminiCoachService {
         prompt: String,
         jsonMode: Boolean
     ): SingleAttemptResult {
+        val safeModel = sanitizeGeminiModel(model)
         var connection: HttpURLConnection? = null
         return try {
-            val endpoint = "$GEMINI_API_BASE/$model:generateContent"
+            val endpoint = "$GEMINI_API_BASE/$safeModel:generateContent"
             val url = URL(endpoint)
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -553,7 +566,10 @@ object GeminiCoachService {
                 val extracted = extractCandidateText(rawBody)
                 return if (extracted.isNullOrBlank()) {
                     SingleAttemptResult.NonRetryableFailure(
-                        "Respons Gemini kosong. Coba beberapa saat lagi."
+                        AiCoachService.appendSentModelTag(
+                            "Respons Gemini kosong. Coba beberapa saat lagi.",
+                            safeModel
+                        )
                     )
                 } else {
                     SingleAttemptResult.Success(extracted)
@@ -575,30 +591,36 @@ object GeminiCoachService {
                     )
                 }
                 429 -> {
+                    val base = serverMessage?.let { "Kuota Gemini penuh (429): $it" }
+                        ?: "Kuota Gemini sementara penuh. Coba tekan Refresh sebentar lagi ya."
                     SingleAttemptResult.RetryableFailure(
                         statusCode = 429,
-                        userMessage = serverMessage?.let { "Kuota Gemini penuh (429): $it" }
-                            ?: "Kuota Gemini sementara penuh. Coba tekan Refresh sebentar lagi ya."
+                        userMessage = AiCoachService.appendSentModelTag(base, safeModel)
                     )
                 }
                 HttpURLConnection.HTTP_BAD_REQUEST,
                 HttpURLConnection.HTTP_UNAUTHORIZED,
                 HttpURLConnection.HTTP_FORBIDDEN -> {
+                    val base = serverMessage?.let { "Gemini AI ($statusCode): $it" }
+                        ?: "API Key Gemini tidak valid atau belum aktif. Periksa kembali di Pengaturan."
                     SingleAttemptResult.NonRetryableFailure(
-                        serverMessage?.let { "Gemini AI ($statusCode): $it" }
-                            ?: "API Key Gemini tidak valid atau belum aktif. Periksa kembali di Pengaturan."
+                        AiCoachService.appendSentModelTag(base, safeModel)
                     )
                 }
                 else -> {
+                    val base = serverMessage?.let { "Gemini AI ($statusCode): $it" }
+                        ?: "Layanan Gemini sedang tidak merespons (kode $statusCode). Coba lagi nanti."
                     SingleAttemptResult.NonRetryableFailure(
-                        serverMessage?.let { "Gemini AI ($statusCode): $it" }
-                            ?: "Layanan Gemini sedang tidak merespons (kode $statusCode). Coba lagi nanti."
+                        AiCoachService.appendSentModelTag(base, safeModel)
                     )
                 }
             }
         } catch (_: Exception) {
             SingleAttemptResult.NonRetryableFailure(
-                "Tidak dapat terhubung ke Gemini AI. Periksa koneksi internetmu."
+                AiCoachService.appendSentModelTag(
+                    "Tidak dapat terhubung ke Gemini AI. Periksa koneksi internetmu.",
+                    safeModel
+                )
             )
         } finally {
             connection?.disconnect()
