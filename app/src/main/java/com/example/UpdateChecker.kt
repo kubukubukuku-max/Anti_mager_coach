@@ -48,9 +48,9 @@ object UpdateChecker {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            packageInfo.versionName?.takeIf { it.isNotBlank() } ?: "1.0"
+            packageInfo.versionName?.takeIf { it.isNotBlank() } ?: BuildConfig.VERSION_NAME
         } catch (_: Exception) {
-            "1.0"
+            BuildConfig.VERSION_NAME
         }
     }
 
