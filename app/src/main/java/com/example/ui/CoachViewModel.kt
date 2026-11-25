@@ -87,6 +87,7 @@ data class CoachUiState(
     val activeWorkout: ActiveWorkoutState? = null,
     val aiProvider: AiProvider = AiProvider.GROQ,
     val activeAiApiKey: String = "",
+    val groqModelName: String = AiCoachService.GROQ_MODEL_NAME,
     val isLoadingAiSuggestions: Boolean = false,
     val weeklyReviewState: WeeklyReviewUiState = WeeklyReviewUiState.Idle
 ) {
@@ -115,6 +116,7 @@ class CoachViewModel(
     private val activeWorkout = MutableStateFlow<ActiveWorkoutState?>(null)
     private val selectedAiProvider = MutableStateFlow(geminiApiKeyStore.getSelectedProvider())
     private val activeAiApiKey = MutableStateFlow(geminiApiKeyStore.getApiKey(selectedAiProvider.value))
+    private val groqModelName = MutableStateFlow(geminiApiKeyStore.getGroqModel())
     private val aiRecommendationsCache = MutableStateFlow<Map<TodayStatus, DailyRecommendation>>(emptyMap())
     private val isLoadingAiSuggestions = MutableStateFlow(false)
     private val weeklyReviewState = MutableStateFlow<WeeklyReviewUiState>(WeeklyReviewUiState.Idle)
@@ -182,19 +184,27 @@ class CoachViewModel(
     private data class AiUiSnapshot(
         val provider: AiProvider,
         val apiKey: String,
+        val groqModel: String,
         val cachedMap: Map<TodayStatus, DailyRecommendation>,
         val isLoadingSuggestions: Boolean,
         val weeklyReview: WeeklyReviewUiState
     )
 
-    private val aiStateFlow = combine(
+    private val aiConfigFlow = combine(
         selectedAiProvider,
         activeAiApiKey,
+        groqModelName
+    ) { provider, key, model ->
+        Triple(provider, key, model)
+    }
+
+    private val aiStateFlow = combine(
+        aiConfigFlow,
         aiRecommendationsCache,
         isLoadingAiSuggestions,
         weeklyReviewState
-    ) { provider, key, cache, loadingAi, review ->
-        AiUiSnapshot(provider, key, cache, loadingAi, review)
+    ) { (provider, key, model), cache, loadingAi, review ->
+        AiUiSnapshot(provider, key, model, cache, loadingAi, review)
     }
 
     private val overlayFlow = combine(
@@ -251,6 +261,7 @@ class CoachViewModel(
             activeWorkout = liveWorkout,
             aiProvider = aiSnapshot.provider,
             activeAiApiKey = aiSnapshot.apiKey,
+            groqModelName = aiSnapshot.groqModel,
             isLoadingAiSuggestions = aiSnapshot.isLoadingSuggestions,
             weeklyReviewState = aiSnapshot.weeklyReview
         )
@@ -263,7 +274,8 @@ class CoachViewModel(
             isCloudSyncEnabled = isCloudMode,
             cloudSyncStatus = if (isCloudMode) CloudSyncStatus.LOADING else CloudSyncStatus.SYNCED,
             aiProvider = selectedAiProvider.value,
-            activeAiApiKey = activeAiApiKey.value
+            activeAiApiKey = activeAiApiKey.value,
+            groqModelName = groqModelName.value
         )
     )
 
@@ -354,7 +366,17 @@ class CoachViewModel(
         }
     }
 
-    fun saveAiApiKey(provider: AiProvider, rawKey: String) {
+    fun saveGroqModel(rawModel: String) {
+        val savedModel = geminiApiKeyStore.saveGroqModel(rawModel)
+        groqModelName.value = savedModel
+        aiRecommendationsCache.value = emptyMap()
+        snackbarMessage.value = "Model Groq aktif disetel ke $savedModel"
+        if (selectedAiProvider.value == AiProvider.GROQ && activeAiApiKey.value.isNotBlank()) {
+            refreshAiSuggestions(targetStatus = selectedStatus.value, explicitTrigger = false)
+        }
+    }
+
+    fun saveAiApiKey(provider: AiProvider, rawKey: String, rawGroqModel: String? = null) {
         val cleaned = rawKey.trim()
         val effectiveProvider = if (cleaned.isNotEmpty()) {
             AiCoachService.resolveEffectiveProvider(provider, cleaned)
@@ -365,6 +387,10 @@ class CoachViewModel(
         geminiApiKeyStore.saveApiKey(effectiveProvider, cleaned)
         selectedAiProvider.value = effectiveProvider
         activeAiApiKey.value = cleaned
+        if (rawGroqModel != null && effectiveProvider == AiProvider.GROQ) {
+            val savedModel = geminiApiKeyStore.saveGroqModel(rawGroqModel)
+            groqModelName.value = savedModel
+        }
         aiRecommendationsCache.value = emptyMap()
         if (cleaned.isNotEmpty()) {
             val autoRoutedNote = if (effectiveProvider != provider) {
@@ -372,11 +398,21 @@ class CoachViewModel(
             } else {
                 ""
             }
-            snackbarMessage.value = "API Key ${effectiveProvider.displayName} tersimpan$autoRoutedNote — AI Aktif ✨"
+            val modelSuffix = if (effectiveProvider == AiProvider.GROQ) {
+                " • Model: ${groqModelName.value}"
+            } else {
+                ""
+            }
+            snackbarMessage.value = "API Key ${effectiveProvider.displayName} tersimpan$autoRoutedNote$modelSuffix — AI Aktif ✨"
             refreshAiSuggestions(targetStatus = selectedStatus.value, explicitTrigger = false)
         } else {
             snackbarMessage.value = "API Key ${effectiveProvider.displayName} dihapus — kembali ke Mode Offline (Aturan Lokal)."
         }
+    }
+
+    private fun handleAutoUpdatedGroqModel(newModel: String) {
+        val persisted = geminiApiKeyStore.saveGroqModel(newModel)
+        groqModelName.value = persisted
     }
 
     fun refreshAiSuggestions(
@@ -391,6 +427,7 @@ class CoachViewModel(
             }
             return
         }
+        val activeGroqModel = groqModelName.value
         viewModelScope.launch {
             isLoadingAiSuggestions.value = true
             try {
@@ -399,7 +436,9 @@ class CoachViewModel(
                         provider = provider,
                         apiKey = key,
                         sessions = uiState.value.allSessions,
-                        energyState = targetStatus
+                        energyState = targetStatus,
+                        groqModel = activeGroqModel,
+                        onGroqModelAutoUpdated = { updated -> handleAutoUpdatedGroqModel(updated) }
                     )
                 ) {
                     is DailySuggestionsResult.Success -> {
@@ -430,13 +469,16 @@ class CoachViewModel(
             selectedAiProvider.value = provider
             geminiApiKeyStore.saveSelectedProvider(provider)
         }
+        val activeGroqModel = groqModelName.value
         viewModelScope.launch {
             weeklyReviewState.value = WeeklyReviewUiState.Loading
             when (
                 val result = AiCoachService.generateWeeklyReview(
                     provider = provider,
                     apiKey = key,
-                    sessions = uiState.value.allSessions
+                    sessions = uiState.value.allSessions,
+                    groqModel = activeGroqModel,
+                    onGroqModelAutoUpdated = { updated -> handleAutoUpdatedGroqModel(updated) }
                 )
             ) {
                 is WeeklyReviewResult.Success -> {

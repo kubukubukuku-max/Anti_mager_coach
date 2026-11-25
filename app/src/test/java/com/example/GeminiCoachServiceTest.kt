@@ -293,6 +293,7 @@ class GeminiCoachServiceTest {
         assertEquals("gemini-3.8-flash", GeminiCoachService.sanitizeGeminiModel("gemini-3.8-flash"))
         assertEquals("gemini-3.5-flash-lite", GeminiCoachService.sanitizeGeminiModel("gemini-3.5-flash-lite"))
         assertEquals("gemini-3.8-flash", GeminiCoachService.sanitizeGeminiModel("llama-3.3-70b-versatile"))
+        assertEquals("gemini-3.8-flash", GeminiCoachService.sanitizeGeminiModel("openai/gpt-oss-20b"))
         assertEquals("gemini-3.8-flash", GeminiCoachService.sanitizeGeminiModel("canopylabs/orpheus-arabic-saudi"))
         assertEquals("gemini-3.8-flash", GeminiCoachService.sanitizeGeminiModel(""))
         assertEquals("gemini-3.8-flash", GeminiCoachService.sanitizeGeminiModel(null))

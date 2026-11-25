@@ -367,7 +367,7 @@ object GeminiCoachService {
         providerLabel: String = "Gemini AI"
     ): DailyRecommendation? {
         return try {
-            val cleaned = stripCodeFenceIfPresent(rawJson)
+            val cleaned = AiCoachService.extractJsonFromReasoningContent(rawJson)
             val root = JSONObject(cleaned)
             val idealObj = root.optJSONObject("ideal") ?: return null
             val lightObj = root.optJSONObject("light") ?: return null

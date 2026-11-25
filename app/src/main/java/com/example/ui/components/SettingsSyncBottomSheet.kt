@@ -106,8 +106,10 @@ fun SettingsSyncBottomSheet(
     onSignOut: () -> Unit,
     aiProvider: AiProvider,
     aiApiKey: String,
+    groqModelName: String,
     onSelectAiProvider: (AiProvider) -> Unit,
-    onSaveAiApiKey: (AiProvider, String) -> Unit,
+    onSaveAiApiKey: (AiProvider, String, String?) -> Unit,
+    onSaveGroqModel: (String) -> Unit,
     reminderSettings: ReminderSettings,
     onToggleDailyReminder: (Boolean) -> Unit,
     onChangeReminderTime: (hour: Int, minute: Int) -> Unit,
@@ -189,8 +191,10 @@ fun SettingsSyncBottomSheet(
             GeminiAiSettingsCard(
                 selectedProvider = aiProvider,
                 savedApiKey = aiApiKey,
+                savedGroqModel = groqModelName,
                 onSelectProvider = onSelectAiProvider,
-                onSaveApiKey = onSaveAiApiKey
+                onSaveApiKey = onSaveAiApiKey,
+                onSaveGroqModel = onSaveGroqModel
             )
 
             // Daily Reminder Notification Card (Android 10+ Banner & Sound + 5s Test)

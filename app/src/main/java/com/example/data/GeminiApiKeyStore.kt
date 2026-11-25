@@ -5,10 +5,11 @@ import com.example.AiCoachService
 import com.example.AiProvider
 
 /**
- * Local-only storage for AI provider selection and user-provided API keys in private SharedPreferences.
- * Stores separate keys per provider (Groq default + Gemini backup) so switching providers preserves keys.
- * Never reads or persists Groq model names from SharedPreferences (Groq models are strictly locked in code),
- * and automatically heals any leftover `gsk_` key so it always routes to Groq.
+ * Local-only storage for AI provider selection, customizable Groq model name, and user-provided
+ * API keys in private SharedPreferences.
+ * - Default Groq model: `openai/gpt-oss-20b`.
+ * - Automatically migrates blank, blacklisted, or legacy Llama model names to `openai/gpt-oss-20b`.
+ * - Automatically heals any leftover `gsk_` key so it always routes to Groq.
  */
 class GeminiApiKeyStore(context: Context) {
 
@@ -18,10 +19,16 @@ class GeminiApiKeyStore(context: Context) {
     )
 
     init {
-        // Remove any legacy stored Groq model preference so stale Gemini/other model names can never leak
-        if (prefs.contains(LEGACY_KEY_GROQ_MODEL)) {
-            prefs.edit().remove(LEGACY_KEY_GROQ_MODEL).apply()
+        // Auto-migrate legacy Llama / blank / blacklisted Groq model to openai/gpt-oss-20b
+        val storedModel = prefs.getString(KEY_GROQ_MODEL, null)
+        val migratedModel = AiCoachService.sanitizeGroqModel(
+            rawModel = storedModel,
+            migrateLegacyLlama = true
+        )
+        if (storedModel != migratedModel) {
+            prefs.edit().putString(KEY_GROQ_MODEL, migratedModel).apply()
         }
+
         // Auto-heal: if a Groq key (gsk_...) was previously saved under Gemini slot, migrate it to Groq
         val storedGeminiKey = prefs.getString(KEY_GEMINI_API_KEY, "")?.trim().orEmpty()
         if (storedGeminiKey.startsWith("gsk_")) {
@@ -56,6 +63,27 @@ class GeminiApiKeyStore(context: Context) {
 
     fun saveSelectedProvider(provider: AiProvider) {
         prefs.edit().putString(KEY_SELECTED_PROVIDER, provider.name).apply()
+    }
+
+    fun getGroqModel(): String {
+        val raw = prefs.getString(KEY_GROQ_MODEL, null)
+        val sanitized = AiCoachService.sanitizeGroqModel(
+            rawModel = raw,
+            migrateLegacyLlama = true
+        )
+        if (raw != sanitized) {
+            prefs.edit().putString(KEY_GROQ_MODEL, sanitized).apply()
+        }
+        return sanitized
+    }
+
+    fun saveGroqModel(rawModel: String): String {
+        val sanitized = AiCoachService.sanitizeGroqModel(
+            rawModel = rawModel,
+            migrateLegacyLlama = true
+        )
+        prefs.edit().putString(KEY_GROQ_MODEL, sanitized).apply()
+        return sanitized
     }
 
     fun getApiKey(provider: AiProvider = getSelectedProvider()): String {
@@ -95,6 +123,6 @@ class GeminiApiKeyStore(context: Context) {
         private const val KEY_SELECTED_PROVIDER = "selected_ai_provider"
         private const val KEY_GROQ_API_KEY = "groq_api_key"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
-        private const val LEGACY_KEY_GROQ_MODEL = "groq_model_name"
+        private const val KEY_GROQ_MODEL = "groq_model_name"
     }
 }

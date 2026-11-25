@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import com.example.AiCoachService
 import com.example.AiProvider
 import com.example.R
 import com.example.ui.WeeklyReviewUiState
@@ -56,14 +58,17 @@ import com.example.ui.theme.AntiMagerTheme
 fun GeminiAiSettingsCard(
     selectedProvider: AiProvider,
     savedApiKey: String,
+    savedGroqModel: String,
     onSelectProvider: (AiProvider) -> Unit,
-    onSaveApiKey: (AiProvider, String) -> Unit,
+    onSaveApiKey: (AiProvider, String, String?) -> Unit,
+    onSaveGroqModel: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val extendedColors = AntiMagerTheme.extendedColors
     val isActive = savedApiKey.isNotBlank()
 
     var keyInput by remember(selectedProvider, savedApiKey) { mutableStateOf(savedApiKey) }
+    var groqModelInput by remember(savedGroqModel) { mutableStateOf(savedGroqModel) }
     var isKeyVisible by remember(selectedProvider) { mutableStateOf(false) }
 
     Surface(
@@ -187,7 +192,11 @@ fun GeminiAiSettingsCard(
                                     maxLines = 1
                                 )
                                 Text(
-                                    text = provider.modelSummary,
+                                    text = if (provider == AiProvider.GROQ) {
+                                        savedGroqModel
+                                    } else {
+                                        provider.modelSummary
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1
@@ -251,6 +260,90 @@ fun GeminiAiSettingsCard(
                     .testTag("gemini_api_key_input")
             )
 
+            if (selectedProvider == AiProvider.GROQ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = groqModelInput,
+                        onValueChange = { groqModelInput = it },
+                        label = { Text(stringResource(R.string.settings_groq_model_label)) },
+                        placeholder = { Text(stringResource(R.string.settings_groq_model_placeholder)) },
+                        singleLine = true,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Memory,
+                                contentDescription = null,
+                                tint = extendedColors.subtleInk,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("groq_model_input")
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AiCoachService.GROQ_PRESET_MODELS.forEachIndexed { index, presetModel ->
+                            val isSelectedPreset = groqModelInput.trim().equals(presetModel, ignoreCase = true)
+                            val shortTitle = if (index == 0) "gpt-oss-20b (Default)" else "gpt-oss-120b (Cadangan)"
+                            val chipTag = if (index == 0) "groq_model_preset_20b" else "groq_model_preset_120b"
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelectedPreset) extendedColors.idealContainer else extendedColors.warmSandSurface,
+                                border = BorderStroke(
+                                    width = if (isSelectedPreset) 1.5.dp else 1.dp,
+                                    color = if (isSelectedPreset) extendedColors.idealAccent else extendedColors.cardBorder
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        groqModelInput = presetModel
+                                        onSaveGroqModel(presetModel)
+                                    }
+                                    .testTag(chipTag)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = shortTitle,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = if (isSelectedPreset) FontWeight.SemiBold else FontWeight.Medium
+                                        ),
+                                        color = if (isSelectedPreset) {
+                                            extendedColors.idealAccent
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = presetModel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = stringResource(R.string.settings_groq_model_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extendedColors.subtleInk
+                    )
+                }
+            }
+
             Text(
                 text = "Key ${selectedProvider.displayName} disimpan lokal hanya di perangkatmu (tidak diunggah ke cloud). Kosongkan lalu simpan untuk kembali ke Mode Offline.",
                 style = MaterialTheme.typography.labelSmall,
@@ -258,7 +351,13 @@ fun GeminiAiSettingsCard(
             )
 
             Button(
-                onClick = { onSaveApiKey(selectedProvider, keyInput) },
+                onClick = {
+                    onSaveApiKey(
+                        selectedProvider,
+                        keyInput,
+                        if (selectedProvider == AiProvider.GROQ) groqModelInput else null
+                    )
+                },
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = extendedColors.idealAccent,
@@ -270,7 +369,11 @@ fun GeminiAiSettingsCard(
                     .testTag("save_gemini_key_button")
             ) {
                 Text(
-                    text = "${stringResource(R.string.action_save_api_key)} ${selectedProvider.displayName}",
+                    text = if (selectedProvider == AiProvider.GROQ) {
+                        stringResource(R.string.action_save_groq_settings)
+                    } else {
+                        "${stringResource(R.string.action_save_api_key)} ${selectedProvider.displayName}"
+                    },
                     style = MaterialTheme.typography.labelLarge
                 )
             }

@@ -132,7 +132,11 @@ fun CoachScreen(
         if (message != null) {
             snackbarHostState.showSnackbar(
                 message = message,
-                duration = if (message.contains("HTTP ") || message.contains("[Model terkirim:")) {
+                duration = if (
+                    message.contains("HTTP ") ||
+                    message.contains("[Model terkirim:") ||
+                    message.contains("[Model dicoba:")
+                ) {
                     SnackbarDuration.Long
                 } else {
                     SnackbarDuration.Short
@@ -584,8 +588,12 @@ fun CoachScreen(
             },
             aiProvider = uiState.aiProvider,
             aiApiKey = uiState.activeAiApiKey,
+            groqModelName = uiState.groqModelName,
             onSelectAiProvider = { provider -> viewModel.selectAiProvider(provider) },
-            onSaveAiApiKey = { provider, key -> viewModel.saveAiApiKey(provider, key) },
+            onSaveAiApiKey = { provider, key, groqModel ->
+                viewModel.saveAiApiKey(provider, key, groqModel)
+            },
+            onSaveGroqModel = { model -> viewModel.saveGroqModel(model) },
             reminderSettings = uiState.reminderSettings,
             onToggleDailyReminder = { enabled ->
                 if (!enabled) {

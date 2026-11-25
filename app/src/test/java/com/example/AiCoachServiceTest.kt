@@ -8,6 +8,7 @@ import com.example.model.TodayStatus
 import com.example.model.WorkoutSession
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,7 +16,7 @@ import org.junit.Test
 class AiCoachServiceTest {
 
     @Test
-    fun groqIsDefaultProviderWithExpectedEndpointAndModel() {
+    fun groqIsDefaultProviderWithOpenAiGptOssModels() {
         assertEquals(AiProvider.GROQ, AiProvider.fromStoredName(null))
         assertEquals(AiProvider.GROQ, AiProvider.fromStoredName(""))
         assertEquals(AiProvider.GROQ, AiProvider.fromStoredName("UNKNOWN"))
@@ -26,9 +27,15 @@ class AiCoachServiceTest {
             "https://api.groq.com/openai/v1/chat/completions",
             AiCoachService.GROQ_ENDPOINT
         )
-        assertEquals("llama-3.3-70b-versatile", AiCoachService.GROQ_MODEL_NAME)
-        assertEquals("llama-3.3-70b-versatile", AiProvider.GROQ.modelSummary)
+        assertEquals(
+            "https://api.groq.com/openai/v1/models",
+            AiCoachService.GROQ_MODELS_ENDPOINT
+        )
+        assertEquals("openai/gpt-oss-20b", AiCoachService.GROQ_MODEL_NAME)
+        assertEquals("openai/gpt-oss-120b", AiCoachService.GROQ_FALLBACK_MODEL_NAME)
+        assertEquals("openai/gpt-oss-20b", AiProvider.GROQ.modelSummary)
         assertEquals("gemini-3.8-flash", AiProvider.GEMINI.modelSummary)
+        assertEquals(2048, AiCoachService.GROQ_MAX_TOKENS)
     }
 
     @Test
@@ -145,64 +152,96 @@ class AiCoachServiceTest {
     }
 
     @Test
-    fun sanitizeGroqModelBlocksEmptyOrpheusAndUnknownModels() {
-        assertEquals("llama-3.3-70b-versatile", AiCoachService.sanitizeGroqModel(null))
-        assertEquals("llama-3.3-70b-versatile", AiCoachService.sanitizeGroqModel(""))
-        assertEquals("llama-3.3-70b-versatile", AiCoachService.sanitizeGroqModel("   "))
-        assertEquals(
-            "llama-3.3-70b-versatile",
-            AiCoachService.sanitizeGroqModel("canopylabs/orpheus-arabic-saudi")
-        )
-        assertEquals(
-            "llama-3.3-70b-versatile",
-            AiCoachService.sanitizeGroqModel("ORPHEUS-v1-english")
-        )
-        assertEquals(
-            "llama-3.3-70b-versatile",
-            AiCoachService.sanitizeGroqModel("whisper-large-v3")
-        )
-        assertEquals(
-            "llama-3.3-70b-versatile",
-            AiCoachService.sanitizeGroqModel("llama-3.3-70b-versatile")
-        )
-        assertEquals(
-            "llama-3.1-8b-instant",
-            AiCoachService.sanitizeGroqModel("llama-3.1-8b-instant")
-        )
+    fun sanitizeGroqModelMigratesLegacyLlamaAndBlocksBlacklistedModels() {
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel(null))
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel(""))
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("   "))
+        // Legacy Llama models auto-migrate to openai/gpt-oss-20b
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("llama-3.3-70b-versatile"))
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("llama-3.1-8b-instant"))
+        // Blacklisted models rejected
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("canopylabs/orpheus-arabic-saudi"))
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("whisper-large-v3"))
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("playai-tts"))
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("gemini-3.8-flash"))
+        // Valid OpenAI OSS and custom models preserved
+        assertEquals("openai/gpt-oss-20b", AiCoachService.sanitizeGroqModel("openai/gpt-oss-20b"))
+        assertEquals("openai/gpt-oss-120b", AiCoachService.sanitizeGroqModel("openai/gpt-oss-120b"))
+        assertEquals("qwen/qwen3-32b", AiCoachService.sanitizeGroqModel("qwen/qwen3-32b"))
     }
 
     @Test
-    fun buildGroqRequestJsonHardcodesAllowedLlamaModelsOnly() {
-        val primaryBody = AiCoachService.buildGroqRequestJson(
-            model = "canopylabs/orpheus-arabic-saudi",
+    fun buildGroqRequestJsonUsesMaxTokens2048AndOmitsResponseFormat() {
+        val body = AiCoachService.buildGroqRequestJson(
+            model = "openai/gpt-oss-20b",
             systemPrompt = "System prompt",
-            userPrompt = "User prompt",
-            jsonMode = true
+            userPrompt = "User prompt"
         )
-        assertTrue(primaryBody.contains("\"model\":\"llama-3.3-70b-versatile\""))
-        assertTrue(primaryBody.contains("\"response_format\""))
+        assertTrue(body.contains("\"model\":\"openai/gpt-oss-20b\""))
+        assertTrue(body.contains("\"max_tokens\":2048"))
+        assertFalse(body.contains("response_format"))
 
-        val fallbackBody = AiCoachService.buildGroqRequestJson(
-            model = "llama-3.1-8b-instant",
+        val backupBody = AiCoachService.buildGroqRequestJson(
+            model = "openai/gpt-oss-120b",
             systemPrompt = "System prompt",
-            userPrompt = "User prompt",
-            jsonMode = false
+            userPrompt = "User prompt"
         )
-        assertTrue(fallbackBody.contains("\"model\":\"llama-3.1-8b-instant\""))
+        assertTrue(backupBody.contains("\"model\":\"openai/gpt-oss-120b\""))
+        assertTrue(backupBody.contains("\"max_tokens\":2048"))
+        assertFalse(backupBody.contains("response_format"))
     }
 
     @Test
-    fun groq404FallsBackFrom70bTo8bInstantWithoutCallingModelsEndpoint() = runBlocking {
+    fun reasoningParserStripsThinkBlocksFencesAndExtractsOuterJsonObject() {
+        val rawGroqResponse = """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "content": "<think>\nAnalisis riwayat latihan 14 hari...\nPeriksa {contoh} dalam pikiran.\n</think>\nBerikut rekomendasimu:\n```json\n{\"insightBadge\":\"✨ Siap gerak\",\"ideal\":{\"title\":\"Jalan Santai\"},\"light\":{\"title\":\"Stretching\"}}\n```\nSemoga membantu!"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val extractedJson = AiCoachService.extractGroqContent(
+            rawResponse = rawGroqResponse,
+            extractJsonObject = true
+        )
+        assertNotNull(extractedJson)
+        assertTrue(extractedJson!!.startsWith("{"))
+        assertTrue(extractedJson.endsWith("}"))
+        assertFalse(extractedJson.contains("<think>"))
+        assertFalse(extractedJson.contains("```"))
+        assertTrue(extractedJson.contains("\"insightBadge\":\"✨ Siap gerak\""))
+
+        val rawWeeklyText = "<think>Susun 3 poin evaluasi...</think>\n🎯 1. Keren, 3 sesi minggu ini!"
+        val cleanedWeekly = AiCoachService.cleanReasoningText(rawWeeklyText)
+        assertEquals("🎯 1. Keren, 3 sesi minggu ini!", cleanedWeekly)
+    }
+
+    @Test
+    fun groqFallbackTries20bThen120bAndSavesActiveModelWithoutCallingModelsEndpoint() = runBlocking {
         val calledModels = mutableListOf<String>()
+        var modelsEndpointCalls = 0
+        var savedModel: String? = null
 
         val result = AiCoachService.executeGroqWithFallback(
-            models = AiCoachService.GROQ_MODEL_LIST,
+            preferredModel = "openai/gpt-oss-20b",
+            backupModel = "openai/gpt-oss-120b",
             delayFn = {},
+            fetchAvailableModels = {
+                modelsEndpointCalls++
+                listOf("qwen/qwen3-32b")
+            },
+            onActiveModelChanged = { savedModel = it },
             invoker = { model ->
                 calledModels.add(model)
-                if (model == "llama-3.3-70b-versatile") {
-                    AiCoachService.GroqAttemptResult.ModelNotFoundFailure(
-                        AiCoachService.formatHttpDiagnostic(
+                if (model == "openai/gpt-oss-20b") {
+                    AiCoachService.GroqAttemptResult.ModelFailure(
+                        statusCode = 404,
+                        userMessage = AiCoachService.formatHttpDiagnostic(
                             statusCode = 404,
                             endpointUrl = AiCoachService.GROQ_ENDPOINT,
                             sentModel = model,
@@ -215,14 +254,151 @@ class AiCoachServiceTest {
             }
         )
 
-        assertEquals(
-            listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant"),
-            calledModels
-        )
+        assertEquals(listOf("openai/gpt-oss-20b", "openai/gpt-oss-120b"), calledModels)
+        assertEquals(0, modelsEndpointCalls)
+        assertEquals("openai/gpt-oss-120b", savedModel)
         assertTrue(result is GeminiCoachService.GeminiHttpResult.Success)
         assertEquals(
-            "llama-3.1-8b-instant",
+            "openai/gpt-oss-120b",
             (result as GeminiCoachService.GeminiHttpResult.Success).modelUsed
+        )
+    }
+
+    @Test
+    fun groqFallbackCallsModelsEndpointOnlyWhenBothPrimaryAndBackupFailWithModelErrorAndFiltersStrictly() = runBlocking {
+        val calledModels = mutableListOf<String>()
+        var modelsEndpointCalls = 0
+        var savedModel: String? = null
+
+        val result = AiCoachService.executeGroqWithFallback(
+            preferredModel = "openai/gpt-oss-20b",
+            backupModel = "openai/gpt-oss-120b",
+            delayFn = {},
+            fetchAvailableModels = {
+                modelsEndpointCalls++
+                listOf(
+                    "canopylabs/orpheus-arabic-saudi",
+                    "whisper-large-v3",
+                    "playai-tts",
+                    "meta-llama/llama-guard-4-12b",
+                    "meta-llama/llama-prompt-guard-2-86m",
+                    "groq/compound",
+                    "allam-2-7b",
+                    "llama-3.2-11b-vision-preview",
+                    "openai/gpt-oss-safeguard-20b",
+                    "deepseek-r1-distill-llama-70b",
+                    "qwen/qwen3-32b"
+                )
+            },
+            onActiveModelChanged = { savedModel = it },
+            invoker = { model ->
+                calledModels.add(model)
+                if (model == "openai/gpt-oss-20b" || model == "openai/gpt-oss-120b") {
+                    AiCoachService.GroqAttemptResult.ModelFailure(
+                        statusCode = 404,
+                        userMessage = AiCoachService.formatHttpDiagnostic(
+                            statusCode = 404,
+                            endpointUrl = AiCoachService.GROQ_ENDPOINT,
+                            sentModel = model,
+                            serverErrorMessage = "The model does not exist"
+                        )
+                    )
+                } else {
+                    AiCoachService.GroqAttemptResult.Success("{\"ok\":true}")
+                }
+            }
+        )
+
+        // qwen has higher whitelist priority than deepseek; all blacklisted models ignored
+        assertEquals(1, modelsEndpointCalls)
+        assertEquals(
+            listOf("openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3-32b"),
+            calledModels
+        )
+        assertEquals("qwen/qwen3-32b", savedModel)
+        assertTrue(result is GeminiCoachService.GeminiHttpResult.Success)
+    }
+
+    @Test
+    fun groqRateLimit429FallsBackTo120bWithoutCallingModelsEndpoint() = runBlocking {
+        val calledModels = mutableListOf<String>()
+        var modelsEndpointCalls = 0
+
+        val result = AiCoachService.executeGroqWithFallback(
+            preferredModel = "openai/gpt-oss-20b",
+            backupModel = "openai/gpt-oss-120b",
+            maxRetries = 1,
+            delayFn = {},
+            fetchAvailableModels = {
+                modelsEndpointCalls++
+                listOf("qwen/qwen3-32b")
+            },
+            invoker = { model ->
+                calledModels.add(model)
+                AiCoachService.GroqAttemptResult.RetryableFailure(
+                    statusCode = 429,
+                    userMessage = AiCoachService.formatHttpDiagnostic(
+                        statusCode = 429,
+                        endpointUrl = AiCoachService.GROQ_ENDPOINT,
+                        sentModel = model,
+                        serverErrorMessage = "Rate limit exceeded"
+                    )
+                )
+            }
+        )
+
+        assertEquals(0, modelsEndpointCalls)
+        assertTrue(calledModels.contains("openai/gpt-oss-20b"))
+        assertTrue(calledModels.contains("openai/gpt-oss-120b"))
+        assertTrue(result is GeminiCoachService.GeminiHttpResult.Failure)
+        val message = (result as GeminiCoachService.GeminiHttpResult.Failure).userMessage
+        assertTrue(message.contains("HTTP 429"))
+        assertTrue(message.contains("Rate limit exceeded"))
+        assertTrue(message.contains("openai/gpt-oss-20b"))
+        assertTrue(message.contains("openai/gpt-oss-120b"))
+    }
+
+    @Test
+    fun selectBestFallbackModelsEnforcesStrictBlacklistAndWhitelistPriority() {
+        val candidates = AiCoachService.selectBestFallbackModelsFromListing(
+            modelIds = listOf(
+                "canopylabs/orpheus-v1-english",
+                "whisper-large-v3-turbo",
+                "playai-tts-arabic",
+                "groq/compound-mini",
+                "meta-llama/llama-guard-4-12b",
+                "meta-llama/llama-prompt-guard-2-22m",
+                "nomic-embed-text",
+                "cohere-rerank-v3",
+                "text-moderation-latest",
+                "openai/gpt-oss-safeguard-20b",
+                "speech-to-text-v1",
+                "audio-preview-1",
+                "qwen-vision-7b",
+                "unknown-custom-model",
+                "meta-llama/llama-4-scout-17b-16e-instruct",
+                "mistral-saba-24b",
+                "gemma2-9b-it",
+                "moonshotai/kimi-k2-instruct",
+                "deepseek-r1-distill-qwen-32b",
+                "qwen/qwen3-32b",
+                "openai/gpt-oss-20b",
+                "openai/gpt-oss-120b"
+            ),
+            alreadyTried = setOf("openai/gpt-oss-20b")
+        )
+
+        assertEquals(
+            listOf(
+                "openai/gpt-oss-120b",
+                "deepseek-r1-distill-qwen-32b", // contains "qwen" (tier 1)
+                "qwen/qwen3-32b",
+                "moonshotai/kimi-k2-instruct",
+                "gemma2-9b-it",
+                "mistral-saba-24b",
+                "meta-llama/llama-4-scout-17b-16e-instruct"
+            ),
+            candidates
         )
     }
 
@@ -236,16 +412,16 @@ class AiCoachServiceTest {
         )
         assertTrue(diagnostic.contains("HTTP 404"))
         assertTrue(diagnostic.contains("api.groq.com/openai/v1/chat/completions"))
-        assertTrue(diagnostic.contains("[Model terkirim: llama-3.3-70b-versatile]"))
+        assertTrue(diagnostic.contains("[Model terkirim: openai/gpt-oss-20b]"))
         assertTrue(diagnostic.contains("The model `foo` does not exist"))
 
         val result = AiCoachService.executeGroqWithFallback(
-            models = listOf("canopylabs/orpheus-arabic-saudi"),
+            preferredModel = "canopylabs/orpheus-arabic-saudi",
             delayFn = {},
             invoker = { model ->
                 AiCoachService.GroqAttemptResult.NonRetryableFailure(
                     AiCoachService.formatHttpDiagnostic(
-                        statusCode = 400,
+                        statusCode = 401,
                         endpointUrl = AiCoachService.GROQ_ENDPOINT,
                         sentModel = model,
                         serverErrorMessage = "Invalid API key"
@@ -256,9 +432,9 @@ class AiCoachServiceTest {
 
         assertTrue(result is GeminiCoachService.GeminiHttpResult.Failure)
         val message = (result as GeminiCoachService.GeminiHttpResult.Failure).userMessage
-        assertTrue(message.contains("HTTP 400"))
+        assertTrue(message.contains("HTTP 401"))
         assertTrue(message.contains("api.groq.com/openai/v1/chat/completions"))
-        assertTrue(message.contains("[Model terkirim: llama-3.3-70b-versatile]"))
+        assertTrue(message.contains("[Model terkirim: openai/gpt-oss-20b]"))
         assertTrue(message.contains("Invalid API key"))
     }
 

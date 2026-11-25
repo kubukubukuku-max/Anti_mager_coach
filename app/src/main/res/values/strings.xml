@@ -170,9 +170,13 @@
     <string name="settings_gemini_status_offline">Mode Offline (Aturan Lokal)</string>
     <string name="settings_groq_key_label">Groq API Key</string>
     <string name="settings_groq_key_placeholder">Tempel API Key dari console.groq.com (gsk_...)</string>
+    <string name="settings_groq_model_label">Model Groq</string>
+    <string name="settings_groq_model_placeholder">openai/gpt-oss-20b</string>
+    <string name="settings_groq_model_hint">Pilih cepat openai/gpt-oss-20b (default) atau openai/gpt-oss-120b (cadangan), atau ketik ID model Groq aktif lainnya.</string>
     <string name="settings_gemini_key_label">Gemini API Key</string>
     <string name="settings_gemini_key_placeholder">Tempel API Key dari Google AI Studio</string>
     <string name="action_save_api_key">Simpan Key</string>
+    <string name="action_save_groq_settings">Simpan Pengaturan Groq</string>
     <string name="cd_toggle_api_key_visibility">Tampilkan atau sembunyikan API Key</string>
     <string name="ai_suggestion_badge">✨ Saran AI</string>
     <string name="action_refresh_ai">✨ Refresh AI</string>
